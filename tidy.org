@@ -1,0 +1,97 @@
+#+TITLE: Demonstration of grind-like tactics in Lean
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:nil
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+* ACTIVE Demonstrate Lean's =mini_crush= and =tidy= "by example".
+   SCHEDULED: <2019-04-22 Mon>
+   DEADLINE: <2019-04-26 Fri>
+   :PROPERTIES: 
+   :Effort: 4 days
+   :Away: 1 day CICM CRC (Friday 26th)
+   :Meeting: <2019-04-26 Fri 11:00> Face to face meeting in Paul's office
+   :Description: The CICM paper claims that "=grind= style" tactics =mini_crush= and =tidy= could be useful for continuity proofs, as in =cts=, but at the moment I don't have examples.
+   :Spec: Collect, prepare, and compare examples of =mini_crush= and =tidy=.
+   :Test1: I found one example of [[https://sympa.inria.fr/sympa/arc/coq-club/2011-02/msg00063.html][crush]], and there will be others available.
+   :Challenges: Understanding how these tactics work will be easier once I have a range of examples.
+   :END: 
+** CODE AND COMMENTS
+
+*** Objective 1: Examples for =mini_crush=
+*** Objective 2: Examples for =tidy=
+According to [[https://github.com/leanprover-community/mathlib/blob/master/docs/tactics.md#tidy][the documentation]]:
+#+begin_quote
+"=tidy= attempts to use a variety of conservative tactics to solve the goals. In particular, tidy uses the chain tactic to repeatedly apply a list of tactics to the goal and recursively on new goals, until no tactic makes further progress."
+#+end_quote
+In addition,
+#+begin_quote
+"=tidy= can report the tactic script it found using ~tidy?~"
+#+end_quote
+The example they supply in the docs is
+#+begin_src lean
+example : ∀ x : unit, x = unit.star :=
+lemma my_example : ∀ x : unit, x = unit.star :=
+begin
+   tidy?
+end
+#+end_src
+The trace produced is:
+#+begin_src lean
+/- `tidy` says -/ intros x, exact dec_trivial
+#+end_src
+Of course, this is different from the /term mode/ proof that is produced, which is as follows:
+#+begin_src lean
+theorem my_example : ∀ (x : unit), x = () :=
+λ (x : unit), of_as_true trivial
+#+end_src
+Another example, this time extracted [[https://leanprover-community.github.io/archive/113488general/48042tautoweakerthanexpected.html][from the Zulip chat]], serves to
+illustrate the use of the =@[tidy]= attribute, which changes which tactics are invoked by =tidy=.
+#+begin_src lean
+@[tidy] meta def big_bertha : tactic unit := `[finish]
+
+lemma misc_tauto_a (p q : Prop) : (p ↔ p ∧ q) ↔ (p → q) :=
+by tidy?
+
+#print axioms misc_tauto_a
+#+end_src
+(The style of quoting =finish= here is pretty much the same as what I used when setting up =linarith= for use within the Mathematica-Lean bridge.)
+
+This time, the trace produced by =tidy?= is:
+#+begin_src lean
+/- `tidy` says -/ fsplit, work_on_goal 0 { intros a a_1, cases a, simp at *, big_bertha }, intros a, fsplit, work_on_goal 0 { intros a_1, fsplit, work_on_goal 0 { assumption }, solve_by_elim }, intros a_1, cases a_1, assumption
+#+end_src
+
+In addition to these methods, there's an additional interactive way to engage with =tidy=.
+Running =lean-hole= with the cursor on the "hole" ={! !}= within the following code snippet...
+#+begin_src lean
+lemma misc_tauto_a' (p q : Prop) : (p ↔ p ∧ q) ↔ (p → q) :=
+{! !}
+#+end_src
+...gives the option to fill the hole with =tidy=.
+Code as above, with an additional =begin= ... =end= wrapper, is then generated:
+#+begin_src lean
+lemma misc_tauto_a' (p q : Prop) : (p ↔ p ∧ q) ↔ (p → q) :=
+begin fsplit, work_on_goal 0 { intros a a_1, cases a, simp at *, big_bertha }, intros a, fsplit, work_on_goal 0 { intros a_1, fsplit, work_on_goal 0 { assumption }, solve_by_elim }, intros a_1, cases a_1, assumption end
+#+end_src
+
+** HOW TO RUN THE CODE
+
+** NOTES
+
+** SAMPLE OUTPUT
+
+* APPENDIX
+
+Here are some notes that document my work process.
+
+** Observations
+** Actions taken
+**  List of relevant files

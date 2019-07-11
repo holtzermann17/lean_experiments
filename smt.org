@@ -1,0 +1,585 @@
+#+TITLE: Feasibility of applying the SMT/Lean interface
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:t H:4
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage[dvipsnames]{xcolor}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+#+LATEX_HEADER: \newfontfamily\scshape[Letters=SmallCaps,Scale=1,Color=Maroon]{GoSmallcaps}
+* ACTIVE The CICM paper proposes that an SMT solver could be invoked on sets of facts and that this could be used inside of continuity proofs.  How realistic is that?
+SCHEDULED: <2019-04-08 Mon>
+DEADLINE: <2019-04-12 Fri>
+   :PROPERTIES: 
+   :Effort: 2.5 days
+   :Meeting: <2019-04-15 Mon 14:00> Face to face meeting in Paul's office
+   :Away: 1 morning CICM rebuttal (Tuesday 16th); 1 afternoon careers office (Tuesday); 1 afternoon visit to GP (Thursday); 1 day off (<2019-04-19 Fri> Friday)
+   :END:
+** Introduction
+# Represent examples of facts that can be sent to the SMT solver to
+# reason about.  Since MetiTarski contains similar facts and also
+# calls Z3 as one of its external engines, it could supply a source of
+# facts.  The question is then whether or not the Lean interface to Z3
+# can support the same sets of translations. E.g., the bounds on
+# cosine that are discussed in the paper are also supported by
+# MetiTarski, in [[https://github.com/nasa/pvslib/blob/master/MetiTarski/dist/tptp/Axioms/cos-constant.ax][cos-constant.ax]].  Many other examples are available
+# in the MetiTarski library. It may be that the interface is the
+# bottleneck (i.e., both Lean and MetiTarski can support more than the
+# interface can).  If so, an extension would be warranted.  Since this
+# task is exploratory, I will aim to show working examples and any
+# relevant non-working examples.  Note as well that Simon Hudon is
+# working on a new SMT interface, so I will want to check with him
+# about its status.
+
+The motivating example for examining Lean's support for SMT
+interaction comes from the CICM paper.  These facts were taking as
+simple examples of formal abstracts:
+
+#+begin_src lean
+lemma cosx_values (x : ℝ) :  cos x ≥ -1 ∧ cos x ≤ 1 := sorry
+lemma abs_displ {a b : α} (h : abs a > abs b) : a + b ≠ 0 := sorry
+#+end_src
+
+The goal mentioned in the paper is to use these facts to derive this
+result:
+
+#+begin_src lean
+lemma fact1 (x : ℝ) : cos x + 2 ≠ 0 := sorry
+#+end_src
+
+When I got down to work with a couple of SMT solvers, I saw that this
+is indeed easy to derive (see [[z3 example]] and a slightly modified
+treatment in [[veriT example]]).  However, Lean's current interfaces do
+not support translation of the problem to those services at the
+moment, as I document here.
+
+** CODE AND COMMENTS
+*** Overview of available options
+It seems there are 3 main options at the moment.
+1. There's a built-in SMT mode in =/Users/joe/.elan/toolchains/nightly-2019-01-13/lib/lean/library/init/meta/smt/smt_tactic.lean=. It has updates from a year ago.  Jesse Michael Han put together a recent [[https://leanprover-community.github.io/archive/113488general/79292eblast.html][demo]] of how the built-in tool can be used together with the =eblast= tactic.  However, Leo de Moura warns that it could be deprecated at any stage.  Scott Morrison commented: "=eblast= is super powerful, and would prove a tonne of stuff, e.g., in category theory, but unusable in the presence of non-trivial type classes."  The documentation says "Keep applying heuristic instantiation until the current goal is solved, or it fails."
+2. There's an interface to external SMT tools in https://github.com/leanprover/smt2_interface, also with updates from a year ago. This one has an external dependency on z3, so I've installed Z3-4.8.4.  With that, you can build the interface with =lean --make _target/deps/smt2_interface/=.  The system is set up to run =z3 -smt2 -in=, which means ``read formula from standard input.''  There is a set of tests in the ./test/ subdirectory, which show what the system can do.
+3. A new repository at https://github.com/cipher1024/smt-lean created by Simon Hudon, with updates from 3 months ago.  It has a dependency on the SMT solver =veriT=, with support for other external tools planned. Simon remarks (p.c.): "Right now I'm getting help from Seul who's interested in proof reconstruction and Jesse who's interested in reflection in general."
+*** Sample interactions:
+**** *Demo of the built in smt mode*
+<<demo built in>>
+There are some examples from de Moura in a [[https://github.com/leanprover/presentations/tree/c2094a9da1fecf065fbf7b70a93ce90747cdfe1a/20170116_POPL/smt][presentation from 2017]].  Here are the first two examples there.
+
+#+begin_src lean
+universe variable u
+variable {α : Type u}
+variable [comm_ring α]
+variable [f : α → α]
+variable [p : α → Prop]
+
+/- Our first example is solved using congruence closure, and
+   theory AC. It gets solved as soon as we introduce the hypothesis -/
+lemma smt1 (a b c : α) : a = b → p (a + c) → p (c + b) :=
+begin [smt]
+  intros
+end
+
+/- The tactic performs unit propagation without performing CNF conversion,
+   and propagates equivalences between propositions. -/
+lemma smt2 (p q r : Prop) : p ∧ (q ∨ r) → (p ∧ q) ∨ (p ∧ r) :=
+begin [smt]
+  intros
+end
+
+#print smt1
+#print smt2
+#+end_src
+
+The proof terms that are generated are as follows:
+
+#+begin_src lean
+theorem smt1 : ∀ {α : Type u} [_inst_1 : comm_ring α] [p : α → Prop] (a b c : α), a = b → p (a + c) → p (c + b) :=
+λ {α : Type u} [_inst_1 : comm_ring α] [p : α → Prop] (a b c : α) (a_1 : a = b) (a_2 : p (a + c)),
+  of_eq_true
+    (eq.trans
+       (eq_of_heq
+          ((λ (a a' : α) (e_0 : a = a'), eq.rec (heq.refl (p a)) e_0) (c + b) (a + c)
+             (eq.trans (is_commutative.comm has_add.add c b)
+                (eq.trans
+                   (eq.symm
+                      (eq.trans (eq.trans (is_commutative.comm has_add.add a c) (congr_arg (has_add.add c) a_1))
+                         (is_commutative.comm has_add.add c b)))
+                   (eq.symm (eq.refl (a + c)))))))
+       (eq_true_intro a_2))
+
+theorem smt2 : ∀ (p q r : Prop), p ∧ (q ∨ r) → p ∧ q ∨ p ∧ r :=
+λ (p q r : Prop) (a : p ∧ (q ∨ r)),
+  of_eq_true
+    (eq.trans
+       (eq.rec
+          (eq_of_heq
+             ((λ (b b' : Prop) (e_0 : b = b'), eq.rec (heq.refl (p ∧ q ∨ b)) e_0) (p ∧ r) r
+                (and_eq_of_eq_true_left
+                   (eq.trans (eq.symm (and_eq_of_eq_true_right (eq_true_of_and_eq_true_right (eq_true_intro a))))
+                      (eq_true_intro a)))))
+          (eq_of_heq
+             ((λ (a a' : Prop) (e_0 : a = a'), eq.rec (heq.refl (or a)) e_0) (p ∧ q) q
+                (and_eq_of_eq_true_left
+                   (eq.trans (eq.symm (and_eq_of_eq_true_right (eq_true_of_and_eq_true_right (eq_true_intro a))))
+                      (eq_true_intro a))))))
+       (eq_true_of_and_eq_true_right (eq_true_intro a)))
+#+end_src
+**** *Demo of smt2_interface.* 
+Here's what the code and proof terms for one of the tests written for the =smt2_interface= looks like.
+#+begin_src lean
+import smt2
+
+lemma negation_of_conj :
+    forall (P Q : Prop),
+        not (P ∧ Q) ↔ not P ∨ not Q :=
+by intros; z3 "d1.log"
+
+lemma negation_of_disj :
+    forall (P Q : Prop),
+        ¬ (P ∨ Q) ↔ ¬ P ∧ ¬ Q :=
+begin
+    intros, z3
+end
+
+#print negation_of_conj
+#print negation_of_disj
+#+end_src
+
+This yields:
+
+#+begin_src lean
+theorem negation_of_conj : ∀ (P Q : Prop), ¬(P ∧ Q) ↔ ¬P ∨ ¬Q :=
+λ (P Q : Prop), proof_by_z3 (¬(P ∧ Q) ↔ ¬P ∨ ¬Q)
+#+end_src
+
+#+begin_src lean
+theorem negation_of_disj : ∀ (P Q : Prop), ¬(P ∨ Q) ↔ ¬P ∧ ¬Q :=
+λ (P Q : Prop), proof_by_z3 (¬(P ∨ Q) ↔ ¬P ∧ ¬Q)
+#+end_src
+
+This =proof_by_z3= stuff justifies Simon's reference to proof
+reconstruction.  See also Section [[how smt2_interface works]].
+
+**** *Demo of smt-lean interface.*
+For comparison, the =smt-lean= interface has this example:
+
+#+begin_src lean
+example {x y : ℤ} (h1 : ((x - y) = (x + (- y) + 1)))
+ : false :=
+begin
+  veriT,
+end
+#+end_src
+
+With the cursor on the =veriT= line, we see this output:
+
+# Emacs can understand z3-smt2 here instead of text, but minted doesn't
+# It would be a rainy day project to fix that.
+#+begin_src text
+QF_LIA
+proof_witness_star.log
+(declare-fun x () Int)
+(declare-fun y () Int)
+(assert (= (- x y) (+ (+ x (- y)) 1)))
+(assert (not false))
+Invalid memory reference
+
+( = ( - x y ) ( + ( + x ( - y ) ) 1 ) )
+#+end_src
+
+The =proof_witness_star.log= file mentioned above appears in the root
+directory for this Lean installation (/Users/joe/my_playground_smt).
+#+begin_src text
+1:(input ((= (- x y) (+ (+ x (- y)) 1))))
+2:(tmp_LA_pre ((and (<= (- x y) (+ (+ x (- y)) 1)) (<= (+ (+ x (- y)) 1) (- x y)))) 1)
+3:(and ((<= (+ (+ x (- y)) 1) (- x y))) 2 1)
+4:(la_tautology ((not (<= (+ (+ x (- y)) 1) (- x y)))))
+5:(resolution () 4 3)
+#+end_src
+
+*** Other options
+
+The dReal system (http://dreal.github.io/) "focuses on solving problems that can be encoded as first-order logic formulas over the real numbers. Its special strength is in handling problems that involve a wide range of nonlinear real functions."
+
+That sounds like the sort of thing that might be relevant as an alternative backend.  The system was developed by people at CMU.  But for now it has no integration with Lean.
+
+*** Experiment with the built in smt mode
+Here's what I came up with following, based on Jesse's examples.
+#+begin_src lean
+import data.real.basic
+
+constant cos : ℝ → ℝ
+
+@[ematch]theorem cos_values (x : ℝ) : cos x ≤ 1 ∧ cos x ≥ -1 := sorry
+@[ematch]theorem abs_values (a b : ℝ) : abs a > abs b → a + b ≠ 0 := sorry
+
+@[ematch]theorem cosine_shift (x: ℝ) : cos x + 2 ≠ 0 :=
+by {[smt] eblast}
+#+end_src
+I got the following error:
+#+begin_src text
+solve1 tactic failed, focused goal has not been solved
+state:
+x : ℝ
+⊢ cos x + 2 ≠ 0
+#+end_src
+I've asked for feedback [[https://leanprover.zulipchat.com/#narrow/stream/113488-general/topic/eblast][on Zulip]] to see whether this is at all worth pursuing.
+
+Jessie further explained: "=eblast= is =ematch=, =close= on a loop, so you can replace it with =ematch=, =ematch=, ... to see which lemmas it instantiates."
+
+That didn't work for me, but I did find a way to turn on tracing with =set_option trace.smt.ematch true= (see [[Sample Output]] for output).
+
+Jessie then remarked: "from the =ematch= trace, we can see that =ematch= doesn't know how to move 1 to the other side of an inequality (and probably doesn't know how to derive the above contradiction either). I don't think it's very good at this kind of arithmetic; from playing around with it, it looks like marking =add_le_add_right= or the like as =@[ematch]= drastically slows down each =ematch= round.
+*** Experiment with the smt-lean interface
+<<smt-lean Experiment>>I added the following to the end of smt-lean.lean.
+
+#+begin_src lean
+section cosine_example
+open smt.logic_fragment
+variables X A B C: ℝ
+variables cos : ℝ → ℝ
+example  (i  : C = cos A)
+         (h1 : cos X ≤ 1 ∧ cos X ≥ -1)
+         (h2 : abs A > abs B → A + B ≠ 0)
+         : cos X + 2 ≠ 0 :=
+begin
+  veriT (AUFNIRA),
+end
+end cosine_example
+#+end_src
+
+This produced an error:
+
+#+begin_src text
+invalid function application
+state:
+X A B C : ℝ,
+cos : ℝ → ℝ,
+i : C = cos A,
+h1 : cos X ≤ 1 ∧ cos X ≥ -1,
+h2 : abs A > abs B → A + B ≠ 0,
+a : ¬cos X + 2 ≠ 0
+⊢ false
+#+end_src
+
+Digging a little further it becomes clear that the error is to do with the application of =cos=.
+
+*** A step towards extending smt-lean
+I asked Simon for help understanding the problems in [[smt-lean
+Experiment]].  He gave the advice recorded in Section [[Simon Says]].  I
+implemented the first step of the agenda he recommended, but the other
+steps were beyond me at the moment.
+
+#+begin_src lean
+meta def get_functions : tactic (list expr) :=
+do ls ← local_context,
+   ls' ← ls.mfilter $ λ h,
+         do {h_type ← infer_type h,                           
+             return $ (band (expr.is_arrow h_type)                             
+                            (bnot (expr.has_local h_type)))},                 
+   return ls'
+#+end_src
+
+** HOW TO RUN THE CODE
+Relevant examples for Lean and the two external SMT solvers z3 and
+veriT are copied into =~/Dropbox/From\ Joe/OTHER/smt/=.  The tools and
+dependencies need to be installed or added.  The Lean dependencies can
+be added with =leanpkg add leanprover/smt2_interface= an =leanpkg add
+cipher1024/smt-lean=.  Mathlib should be added first.  With the
+dependencies installed, the individual files in that directory can be
+browsed with a Lean-enabled editor.
+
+Once installed, the external tools can be invoked on the corresponding
+examples as follows.
+
+- =veriT --proof-file-from-input cosine_verit.smt2=
+- =z3 -smt2 cosine_z3.smt2=
+
+** NOTES
+
+1. Lean's ematching procedures seem relevant to our concerns regarding
+   formal abstracts.  As indicated in the examples, this facility does
+   not correspond in a one-to-one fashion with the established
+   facilities of SMT solvers.  This should be examined in more detail
+   and compared with Scott's alternative ([[Scott's Alternative]]).
+
+** SAMPLE OUTPUT
+<<Sample Output>>
+*** ematch trace
+Here's what I got from the =ematch= trace mentioned in Section [[demo built in]]:
+
+#+begin_src lean
+[smt.ematch] instance [abs_values], generation: 1
+abs (cos x) > abs 2 → cos x + 2 ≠ 0
+[smt.ematch] instance [cos_values], generation: 1
+cos x ≤ 1 ∧ cos x ≥ -1
+[smt.ematch] instance, generation: 1, after preprocessing
+abs (cos x) > abs 2 → cos x + 2 ≠ 0
+[smt.ematch] instance, generation: 1, after preprocessing
+cos x ≤ 1 ∧ cos x ≥ -1
+[smt.ematch] instance [le_antisymm'], generation: 2
+(:cos x ≤ 1:) → 1 ≤ cos x → cos x = 1
+[smt.ematch] instance, generation: 2, after preprocessing
+cos x ≤ 1 → 1 ≤ cos x → cos x = 1
+[smt.ematch] instance [le_trans], generation: 2
+cos x ≤ 1 → 1 ≤ cos x → cos x ≤ cos x
+[smt.ematch] instance [le_trans], generation: 3
+1 ≤ cos x → cos x ≤ 1 → 1 ≤ 1
+[smt.ematch] instance [le_antisymm'], generation: 3
+(:1 ≤ cos x:) → cos x ≤ 1 → 1 = cos x
+[smt.ematch] instance, generation: 2, after preprocessing
+cos x ≤ 1 → 1 ≤ cos x → cos x ≤ cos x
+[smt.ematch] instance, generation: 3, after preprocessing
+1 ≤ cos x → cos x ≤ 1 → 1 ≤ 1
+[smt.ematch] instance, generation: 3, after preprocessing
+1 ≤ cos x → cos x ≤ 1 → 1 = cos x
+[smt.ematch] instance [le_refl], generation: 3
+cos x ≤ cos x
+[smt.ematch] instance [le_refl], generation: 4
+1 ≤ 1
+[smt.ematch] instance [le_trans], generation: 3
+1 ≤ cos x → cos x ≤ cos x → 1 ≤ cos x
+[smt.ematch] instance [le_trans], generation: 3
+cos x ≤ cos x → cos x ≤ cos x → cos x ≤ cos x
+[smt.ematch] instance [le_trans], generation: 4
+1 ≤ 1 → 1 ≤ cos x → 1 ≤ cos x
+[smt.ematch] instance [le_trans], generation: 3
+cos x ≤ cos x → cos x ≤ 1 → cos x ≤ 1
+[smt.ematch] instance [le_trans], generation: 4
+1 ≤ 1 → 1 ≤ 1 → 1 ≤ 1
+[smt.ematch] instance [le_trans], generation: 2
+cos x ≤ 1 → 1 ≤ 1 → cos x ≤ 1
+[smt.ematch] instance [le_antisymm'], generation: 3
+(:cos x ≤ cos x:) → cos x ≤ cos x → cos x = cos x
+[smt.ematch] instance [le_antisymm'], generation: 4
+(:1 ≤ 1:) → 1 ≤ 1 → 1 = 1
+[smt.ematch] instance, generation: 3, after preprocessing
+cos x ≤ cos x
+[smt.ematch] instance, generation: 4, after preprocessing
+1 ≤ 1
+[smt.ematch] instance, generation: 3, after preprocessing
+1 ≤ cos x → cos x ≤ cos x → 1 ≤ cos x
+[smt.ematch] instance, generation: 3, after preprocessing
+cos x ≤ cos x → cos x ≤ cos x → cos x ≤ cos x
+[smt.ematch] instance, generation: 4, after preprocessing
+1 ≤ 1 → 1 ≤ cos x → 1 ≤ cos x
+[smt.ematch] instance, generation: 3, after preprocessing
+cos x ≤ cos x → cos x ≤ 1 → cos x ≤ 1
+[smt.ematch] instance, generation: 4, after preprocessing
+1 ≤ 1 → 1 ≤ 1 → 1 ≤ 1
+[smt.ematch] instance, generation: 2, after preprocessing
+cos x ≤ 1 → 1 ≤ 1 → cos x ≤ 1
+[smt.ematch] instance, generation: 3, after preprocessing
+cos x ≤ cos x → cos x ≤ cos x → cos x = cos x
+[smt.ematch] instance, generation: 4, after preprocessing
+1 ≤ 1 → 1 ≤ 1 → 1 = 1
+#+end_src
+
+Jessie explained: "right, so =ematch= just writes all these things down and then prays that =close= (which is just =cc=) can chain together these facts to close the goal."
+
+*** z3 proof
+The proof produced by z3 is below.
+
+#+begin_src text
+((set-logic AUFLIRA)
+(proof
+(let (($x160 (forall ((X Real) )(! (let (($x154 (>= (- 2.0) (- 1.0))))
+ (let (($x151 (<= (- 2.0) 1.0)))
+ (and $x151 $x154))) :qid k!6))
+ ))
+ (let (($x178 (forall ((X Real) )(! false :qid k!6))
+ ))
+ (let ((?x179 (lambda ((X Real) )(let ((@x173 (monotonicity (rewrite (= (<= (- 2.0) 1.0) true)) (rewrite (= (>= (- 2.0) (- 1.0)) false)) (= (and (<= (- 2.0) 1.0) (>= (- 2.0) (- 1.0))) (and true false)))))
+ (trans @x173 (rewrite (= (and true false) false)) (= (and (<= (- 2.0) 1.0) (>= (- 2.0) (- 1.0))) false))))
+ ))
+ (let ((@x186 (trans (quant-intro (proof-bind ?x179) (= $x160 $x178)) (elim-unused (= $x178 false)) (= $x160 false))))
+ (let (($x40 (forall ((X Real) )(! (let ((?x23 (cos X)))
+ (let (($x34 (>= ?x23 (- 1.0))))
+ (let (($x25 (<= ?x23 1.0)))
+ (and $x25 $x34)))) :qid k!6))
+ ))
+ (let ((?x161 (lambda ((X Real) )(let (($x154 (>= (- 2.0) (- 1.0))))
+ (let (($x151 (<= (- 2.0) 1.0)))
+ (let (($x157 (and $x151 $x154)))
+ (let ((?x23 (cos X)))
+ (let (($x34 (>= ?x23 (- 1.0))))
+ (let (($x25 (<= ?x23 1.0)))
+ (let (($x37 (and $x25 $x34)))
+ (let (($x136 (= ?x23 (- 2.0))))
+ (let (($x141 (forall ((X Real) )(! (let ((?x23 (cos X)))
+ (= ?x23 (- 2.0))) :qid k!9))
+ ))
+ (let (($x127 (forall ((X Real) )(! (= (+ (cos X) 2.0) 0.0) :qid k!9))
+ ))
+ (let ((?x142 (lambda ((X Real) )(let (($x126 (= (+ (cos X) 2.0) 0.0)))
+ (let ((@x134 (monotonicity (rewrite (= (+ (cos X) 2.0) (+ 2.0 (cos X)))) (= $x126 (= (+ 2.0 (cos X)) 0.0)))))
+ (trans @x134 (rewrite (= (= (+ 2.0 (cos X)) 0.0) (= (cos X) (- 2.0)))) (= $x126 (= (cos X) (- 2.0)))))))
+ ))
+ (let ((@x146 (mp (asserted $x127) (quant-intro (proof-bind ?x142) (= $x127 $x141)) $x141)))
+ (let ((@x156 (monotonicity (unit-resolution ((_ quant-inst X) (or (not $x141) $x136)) @x146 $x136) (= $x34 $x154))))
+ (let ((@x153 (monotonicity (unit-resolution ((_ quant-inst X) (or (not $x141) $x136)) @x146 $x136) (= $x25 $x151))))
+ (monotonicity @x153 @x156 (= $x37 $x157)))))))))))))))))
+ ))
+ (let (($x29 (forall ((X Real) )(! (let ((?x23 (cos X)))
+ (let (($x25 (<= ?x23 1.0)))
+ (and $x25 (>= ?x23 (- 1.0))))) :qid k!6))
+ ))
+ (let ((?x41 (lambda ((X Real) )(let ((?x23 (cos X)))
+ (let (($x34 (>= ?x23 (- 1.0))))
+ (let (($x25 (<= ?x23 1.0)))
+ (let (($x37 (and $x25 $x34)))
+ (let ((@x36 (monotonicity (rewrite (= (- 1.0) (- 1.0))) (= (>= ?x23 (- 1.0)) $x34))))
+ (monotonicity @x36 (= (and $x25 (>= ?x23 (- 1.0))) $x37))))))))
+ ))
+ (let ((@x45 (mp (asserted $x29) (quant-intro (proof-bind ?x41) (= $x29 $x40)) $x40)))
+ (mp (mp @x45 (quant-intro (proof-bind ?x161) (= $x40 $x160)) $x160) @x186 false))))))))))))
+#+end_src
+
+*** veriT proof, using modified input
+<<veriT example>>Following advice from the veriT developers, I modified the problem slightly
+to help =veriT= with instantiation, and got back the trace that
+follows.
+
+#+begin_src text
+(set-logic AUFLIRA)
+(declare-fun cos ( Real ) Real)
+(declare-fun A () Real)
+(declare-fun C () Real)
+(assert (= C (cos A)))
+(assert (forall (( X Real )) (and (<= (cos  X) 1) (>= (cos  X ) (- 1)))))
+(assert (forall (( A Real ) ( B Real )) (=> (> (abs A) (abs B)) (not (= (+ A B) 0)))))
+(assert (forall (( X Real )) (= (+ (cos X) 2) 0)))
+(check-sat)
+#+end_src
+
+#+begin_src text
+1:(input ((= C (cos A))))
+2:(input ((forall  (X Real) (and (<= (cos X) 1) (>= (cos X) (- 1))))))
+3:(input ((forall  (A Real) (B Real) (=> (> (abs A) (abs B)) (not (= 0 (+ A B)))))))
+4:(input ((forall  (X Real) (= 0 (+ (cos X) 2)))))
+5:(tmp_betared ((forall  (@vr0 Real) (and (<= (cos @vr0) 1) (>= (cos @vr0) (- 1))))) 2)
+6:(tmp_betared ((forall  (@vr1 Real) (@vr2 Real) (=> (> (abs @vr1) (abs @vr2)) (not (= 0 (+ @vr1 @vr2)))))) 3)
+7:(tmp_betared ((forall  (@vr3 Real) (= 0 (+ (cos @vr3) 2)))) 4)
+8:(tmp_qnt_tidy ((forall  (@vr4 Real) (and (<= (cos @vr4) 1) (>= (cos @vr4) (- 1))))) 5)
+9:(tmp_qnt_tidy ((forall  (@vr4 Real) (@vr5 Real) (=> (> (abs @vr4) (abs @vr5)) (not (= 0 (+ @vr4 @vr5)))))) 6)
+10:(tmp_qnt_tidy ((forall  (@vr4 Real) (= 0 (+ (cos @vr4) 2)))) 7)
+11:(forall_inst ((or (not (forall  (@vr4 Real) (= 0 (+ (cos @vr4) 2)))) (= 0 (+ (cos A) 2)))))
+12:(forall_inst ((or (not (forall  (@vr4 Real) (and (<= (cos @vr4) 1) (>= (cos @vr4) (- 1))))) (and (<= (cos A) 1) (>= (cos A) (- 1))))))
+13:(or ((not (forall  (@vr4 Real) (= 0 (+ (cos @vr4) 2)))) (= 0 (+ (cos A) 2))) 11)
+14:(resolution ((= 0 (+ (cos A) 2))) 13 10)
+15:(and_pos ((not (and (<= (cos A) 1) (>= (cos A) (- 1)))) (<= (cos A) 1)) 0)
+16:(and_pos ((not (and (<= (cos A) 1) (>= (cos A) (- 1)))) (>= (cos A) (- 1))) 1)
+17:(or ((not (forall  (@vr4 Real) (and (<= (cos @vr4) 1) (>= (cos @vr4) (- 1))))) (and (<= (cos A) 1) (>= (cos A) (- 1)))) 12)
+18:(resolution ((and (<= (cos A) 1) (>= (cos A) (- 1)))) 17 8)
+19:(resolution ((<= (cos A) 1)) 15 18)
+20:(resolution ((>= (cos A) (- 1))) 16 18)
+21:(la_generic ((not (>= (cos A) (- 1))) (not (= 0 (+ (cos A) 2)))))
+22:(resolution () 21 14 20)
+#+end_src
+
+* APPENDIX
+** Actions taken
+*** Install z3, metitarski, z3 mode for Emacs, and the z3 test suite.
+This gives some basic kit and examples to work with.  The z3 mode
+gives hints using Flycheck, similar to =lean-mode=, which helped me
+write some syntactically correct code to test the system.  The z3
+tests at https://github.com/Z3Prover/z3test/ give lots of sample code
+in SMT-LIB format.
+*** Write the example from the paper in the smt2 format
+<<z3 example>> This is, I think, the correct encoding for the example from the paper.
+#+begin_src text
+(set-logic AUFNIRA)
+(declare-fun cos ( Real ) Real)
+(set-option :numeral-as-real true)
+;; Two basic rules that should combine to give us our conclusion
+(assert (forall (( X Real )) (and (<= ( cos  X ) 1) (>= ( cos  X ) -1))))
+(assert (forall (( A Real ) ( B Real )) (=> (> (abs A) (abs B)) (not (= (+ A B) 0)))))
+;; negate the desired conclusion because we want to check for unsatisfiablity
+(assert (forall (( X Real )) (= (+ (cos X) 2) 0)))
+(check-sat)
+(exit)
+#+end_src
+When I ran z3 on the command line, I got "unsat", which I believe is the desired result.
+#+begin_src text
+$  z3 -smt2 cosine_example.smt2
+unsat
+#+end_src
+*** Got advice from Simon about how to get his smt-lean interface working for my example
+<<Simon Says>>Simon Hudon points out "The encoding does not support custom functions yet. You could add it if you like." He has also very nicely spelled out how to solve this problem:
+
+1. Traverse the context, identify the variables with a function type (not to be confused with universal quantifications) and accumulate them in a list.
+2. Modify the function =to_z3= so that it takes a =rb_map= as a parameter. That map should give you a function name when you don't recognize the function in an application.
+3. Build that =rb_map=.
+4. Use the list of function symbols to declare functions in the smtlib2 syntax.
+
+That looks like an interesting but for me pretty tough exercise.  I managed to complete the first step.
+
+** Observations
+*** How the smt2_interface works
+<<how smt2_interface works>>Interesting to notice that the main z3 tactic makes use of the "special axiom" that
+shows up in Hales's descriptions of formal abstracts.
+#+begin_src lean
+axiom proof_by_z3 (A : Sort u) : A
+
+meta def z3 (log_file : option string := none) : tactic unit :=
+do (builder, _) ← smt2.reflect.run smt2_state.initial,
+   resp ← unsafe_run_io (smt2 builder log_file),
+   match resp with
+   | smt2.response.sat := fail "z3 was unable to prove the goal"
+   | smt2.response.unknown := fail "z3 was unable to prove the goal"
+   | smt2.response.other str := fail $ "z3 communication error, unexpected response:\n\n" ++ str ++ "\n"
+   | smt2.response.unsat := do
+        tgt ← target,
+        sry ← to_expr $ ``(proof_by_z3 %%tgt),
+        exact sry
+   end
+#+end_src
+*** Apparently the smt2_interface does not like reals
+Looking at the functions =supported_pi_binder= and
+=is_supported_numeric_ty=, I see that =int= and =nat= are translated
+over, but it does not look like reals are directly supported.
+#+begin_src lean
+meta def is_supported_numeric_ty (ty : expr) : bool :=
+(ty = `(int) ∨ ty = `(nat))
+#+end_src
+When I tried an example as follows, I get an error:
+#+begin_src lean
+import smt2 data.real.basic
+
+constant cos : ℝ → ℝ
+
+lemma cosine_values {x a b: ℝ} (h1 : cos x ≤ 1 ∧ cos x ≥ -1)
+                               (h2 : abs a > abs b → a + b ≠ 0) : 
+    cos x + 2 ≠ 0 :=
+by intros; z3
+#+end_src
+The =z3= tactic complains:
+#+begin_src text
+smt2_tactic: unsupported formula: real
+state:
+x a b : ℝ,
+h1 : cos x ≤ 1 ∧ cos x ≥ -1,
+h2 : abs a > abs b → a + b ≠ 0
+⊢ cos x + 2 ≠ 0
+#+end_src
+*** Scott Morrison proposes an alternative to ematch for built-in rewrite solving
+<<Scott's Alternative>>At https://github.com/leanprover/lean/issues/1940, Scott writes: "I've written my own solution to the problems I was using `ematch` for (essentially, searching the graph of possible rewrites, prioritizing based on edit distance between lhs and rhs). It's slow, but seems quite robust, and can output a sequence of rw invocations, so can be ripped out as necessary."
+
+On the same page, Leo de Moura gives lots of caveats about Lean's built-in SMT support. If I understand correctly, Scott's alternative is https://github.com/semorrison/lean-rewrite-search.
+**  List of relevant files
+The following demonstration examples corresponding to sections of this 
+document are available.
+- =~/Dropbox/From\ Joe/OTHER/smt/built-in-smt-demo.lean=
+- =~/Dropbox/From\ Joe/OTHER/smt/built-in-smt.lean= (includes tracing command)
+- =~/Dropbox/From\ Joe/OTHER/smt/smt-lean-demo.lean=
+- =~/Dropbox/From\ Joe/OTHER/smt/smt2_interface-demo.lean=
+- =~/Dropbox/From\ Joe/OTHER/smt/cosine_verit.smt2=
+- =~/Dropbox/From\ Joe/OTHER/smt/cosine_z3.smt2=
+
+

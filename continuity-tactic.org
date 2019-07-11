@@ -1,0 +1,395 @@
+#+TITLE: Simple continuity tactic
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:nil
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+* Introduction
+
+Without aiming to replicate =cts= as a whole, the aim was like to have a proof-of-concept tactic for automating some simple class of functions, e.g., continuous functions that are composed with \(+,*,-\) but not \(/\).  We discussed using =tidy= and =apply_rules= to deal with these functions.  I started with a simpler tactic which is a variant of =apply_rules=, and which can deal with examples like \(\sin(\sin(\sin(\sin(x))))\).  Then I learned that Reid Barton has written a more general tactic, very much like the one originally envisioned, using =tidy=.  However, when I tried my example with Reid's tactic, it ran into trouble.  I expect that could be debugged, and that his framework would be the one to build on for future developments. I report first on the tactic I developed, and talk about Reid's approach in an appendix.
+
+** CODE AND COMMENTS
+
+I have left in all of the tracing commands, below, since they
+illustrate my thought process.  The trace itself is copied into a
+later section to illustrate the operation of the tactic.
+
+The basic problem with =apply_rules= is that it can only run =apply=,
+not =refine= or =exact=, which are needed in proofs like the
+following.
+
+#+begin_src lean
+import topology.basic analysis.complex.exponential
+open real set
+
+lemma continuous_sin_sin_sin : continuous (λ x : ℝ, sin (sin (sin x))) :=
+begin
+refine continuous.comp _ _,
+apply continuous_sin,
+refine continuous.comp _ _,
+apply continuous_sin,
+refine continuous.comp _ _,
+apply continuous_sin,
+exact continuous_id,
+end
+#+end_src
+
+(Incidentally, there have been some minor changes in the underlying
+library, so the proof above now has a slightly different shape to the one I
+presented when I first looked at this.)
+
+Since =apply_rules= wasn't going to work on its own, I made a modified
+version =apply_rules_with_refine= which takes in a list of rules to
+feed to =apply=, and a separate list of rules to feed to =refine=.
+And, indeed, a list of rules to feed into =exact= as well.
+
+The tactic assumes that we only want to =refine= when dealing with a
+lambda expression that is not equivalent to identity.
+
+#+begin_src lean
+import topology.basic analysis.complex.exponential
+import tactic.core data.list.defs
+open real set
+
+----------------------
+/- Use `refine` alongside `apply` -/
+namespace sin_sin
+open tactic
+meta def refine_list_expr : list expr → tactic unit
+| []     := do {trace "fail", fail "no matching rule"}
+| (h::t) := do {trace "refine, initial goals:",
+                gs ← get_goals,
+                mmap infer_type gs >>= trace,
+                (refine ``(%%h _ _)),
+                trace (format!" REFINE: {h}"),
+                trace "refine, final goals:",
+                gs ← get_goals,
+                mmap infer_type gs >>= trace,
+                pure() <|> refine_list_expr t }
+
+meta def exact_list_expr : list expr → tactic unit
+| []     := do {trace "fail", fail "no matching rule"}
+| (h::t) := do {trace "exact, initial goals:",
+                gs ← get_goals,
+                mmap infer_type gs >>= trace,
+                trace (format!" EXACT: {h}"),
+                -- Some problem here at first...
+                exact h,
+                trace "exact, final goals:",
+                gs ← get_goals,
+                mmap infer_type gs >>= trace,
+                pure() <|> exact_list_expr t }
+
+meta def apply_list_expr : list expr → tactic unit
+| []     := fail "no matching rule"
+| (h::t) := do { trace "apply, initial goals:",
+                 gs ← get_goals,
+                 mmap infer_type gs >>= trace,
+                 trace (format!" APPLY: {h}") ,
+                 interactive.concat_tags (apply h),
+                 trace "apply, final goals:",
+                 gs ← get_goals,
+                 mmap infer_type gs >>= trace,
+                 pure() <|> apply_list_expr t }
+
+open nat
+
+-- these were adjusted so that I could get the counter to print out
+meta def iterate_at_most_on_all_goals' : nat → tactic unit → tactic unit
+| 0        tac := trace "All goals: maximal iterations reached"
+| (succ n) tac := tactic.all_goals $ (do tac, trace (format!"All goals:{n}"), iterate_at_most_on_all_goals' n tac) <|> skip
+
+meta def iterate_at_most_on_subgoals' : nat → tactic unit → tactic unit
+| 0        tac := trace "Subgoals: maximal iterations reached"
+| (succ n) tac := focus1 (do tac, trace (format!"Subgoals:{n}"), iterate_at_most_on_all_goals' n tac)
+
+meta def apply_rules_with_refine (apps : list pexpr) (refs : list pexpr) (exas : list pexpr) (n : nat) : tactic unit :=
+do a ← build_list_expr_for_apply apps,
+   r ← build_list_expr_for_apply refs,
+   e ← build_list_expr_for_apply exas,
+   iterate_at_most_on_subgoals' n (assumption
+                                    <|> (do t ← tactic.target,
+                                          let a := expr.app_arg t,
+                                          if (band (expr.is_lambda a)
+                                                   (bnot (eq a `(λ (x : ℝ), x))))
+                                          then refine_list_expr r
+                                          else fail "can't refine")
+                                    <|> (sin_sin.apply_list_expr a)),
+   -- this doesn't work if run inside the loop, above, for some reason
+   sin_sin.exact_list_expr e,
+   pure()
+
+end sin_sin
+----------------------
+
+namespace tactic
+namespace interactive
+open lean
+open lean.parser
+open interactive interactive.types expr
+
+meta def apply_rules_with_refine_interactive (as : parse pexpr_list_or_texpr)
+                                             (rs : parse pexpr_list_or_texpr)
+                                             (es : parse pexpr_list_or_texpr)
+                                             (n : nat := 50) : tactic unit :=
+sin_sin.apply_rules_with_refine as rs es n
+
+end interactive
+end tactic
+
+-- * sin(sin(x)) and friends are continuous on ℝ
+
+open real
+
+lemma continuous_sin_sin : continuous (λ x : ℝ, sin(sin(sin(sin(sin(sin x)))))) := 
+begin
+-- Chris Hughes helped me figure out that we need "@continuous_id ℝ _" rather than "continuous_id" here
+apply_rules_with_refine_interactive [continuous_sin] [continuous.comp] [@continuous_id ℝ _] 7,
+end
+
+#print continuous_sin_sin
+#+end_src
+
+** HOW TO RUN THE CODE
+My code can be copied into any Lean installation set up with mathlib.  
+
+Reid's tactic, discussed in the appendix, is available at
+https://github.com/rwbarton/lean-homotopy-theory/ (in
+=src/homotopy_theory/topological_spaces/tactic.lean=).  It can be installed with
+=leanpkg add rwbarton/lean-homotopy-theory=.  To make the resources it contains
+available, I found that the =leanpkg.path= file in Lean's working directory had
+to be manually adjusted, adding =path _target/deps/lean-homotopy-theory/src=.
+
+** NOTES
+
+1. Something seems to be different about the =exact= rules that makes
+   that part brittle, and, in particular, it didn't work inside the
+   iterative loop.  That should be fixed.
+
+** SAMPLE OUTPUT
+Here is the trace produced by =apply_rules_with_refine_interactive= for my example:
+
+#+begin_src text
+refine, initial goals:
+[continuous (λ (x : ℝ), sin (sin (sin (sin (sin (sin x))))))]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), sin (sin (sin (sin (sin x)))))]
+Subgoals:6
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:5
+refine, initial goals:
+[continuous (λ (x : ℝ), sin (sin (sin (sin (sin x)))))]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), sin (sin (sin (sin x))))]
+All goals:5
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:4
+refine, initial goals:
+[continuous (λ (x : ℝ), sin (sin (sin (sin x))))]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), sin (sin (sin x)))]
+All goals:4
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:3
+refine, initial goals:
+[continuous (λ (x : ℝ), sin (sin (sin x)))]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), sin (sin x))]
+All goals:3
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:2
+refine, initial goals:
+[continuous (λ (x : ℝ), sin (sin x))]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), sin x)]
+All goals:2
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:1
+refine, initial goals:
+[continuous (λ (x : ℝ), sin x)]
+ REFINE: continuous.comp.{?_mlocal._fresh.16.676420 ?_mlocal._fresh.16.676421 ?_mlocal._fresh.16.676422}
+refine, final goals:
+[continuous sin, continuous (λ (x : ℝ), x)]
+All goals:1
+apply, initial goals:
+[continuous sin]
+ APPLY: real.continuous_sin
+apply, final goals:
+[]
+All goals:0
+All goals: maximal iterations reached
+apply, initial goals:
+[continuous (λ (x : ℝ), x)]
+ APPLY: real.continuous_sin
+exact, initial goals:
+[continuous (λ (x : ℝ), x)]
+ EXACT: continuous_id.{0} real (uniform_space.to_topological_space.{0} real (metric_space.to_uniform_space'.{0} real real.metric_space))
+exact, final goals:
+[]
+#+end_src
+
+Here's the proof term produced by =apply_rules_with_refine_interactive= for my example.
+
+#+begin_src lean
+theorem continuous_sin_sin : continuous (λ (x : ℝ), sin (sin (sin (sin (sin (sin x)))))) :=
+continuous.comp continuous_sin
+  (continuous.comp continuous_sin
+     (continuous.comp continuous_sin
+        (continuous.comp continuous_sin
+           (continuous.comp continuous_sin (continuous.comp continuous_sin continuous_id)))))
+#+end_src
+* APPENDIX
+
+** Reid Barton's continuity tactic
+
+I've copied below the code defining  Reid's continuity tactic.  I have elided his comments to better
+illustrate how succinct it is: it fits on one page.
+
+The tactic makes use of =backwards_reasoning=, which is a feature of
+=tidy= that is not in the mathlib version of the tactic.  Some
+discussion of work in progress on a related tactic, =back=, is presented in
+https://github.com/leanprover-community/mathlib/pull/410, where =back=
+is compared with =apply_rules=.  Specifically, =back= is more general, and once it is
+finished, the plan is to remove =apply_rules=.  With this in mind, the tactic I wrote above is
+a little bit similar, though of course it is much less sophisticated.
+
+The =backwards_reasoning= feature, as illustrated in the application
+below, integrates the same basic operations into the =tidy= workflow:
+
+#+begin_quote
+"Try to =apply= any lemma marked with the attributes =@[back]= or =@[back']=."
+#+end_quote
+
+However, again, =apply= cannot do =refine= or =exact=, so those are
+set up separately.  
+
+#+begin_src lean
+import topology.algebra.ring
+import tactic.tidy
+import for_mathlib.tidy
+import for_mathlib.analysis_topology_continuity
+
+attribute [back]
+  continuous_id
+  continuous_subtype_val
+  continuous_fst continuous_snd
+  continuous_inl continuous_inr continuous_sum_rec
+  continuous_top continuous_bot
+  continuous_up continuous_down
+
+@[tidy] meta def apply_continuous.comp :=
+`[fail_if_success { exact continuous_const };
+  refine continuous.comp _ _;
+  fail_if_success { exact continuous_id }]
+
+@[tidy] meta def apply_continuous_subtype_mk := `[refine continuous_subtype_mk _ _]
+@[tidy] meta def apply_continuous.prod_mk := `[refine continuous.prod_mk _ _]
+@[tidy] meta def apply_continuous_min := `[refine continuous_min _ _]
+@[tidy] meta def apply_continuous_max := `[refine continuous_max _ _]
+@[tidy] meta def apply_continuous_neg' := `[exact continuous_neg']
+@[tidy] meta def apply_continuous_add := `[refine continuous_add _ _]
+@[tidy] meta def apply_continuous_sub := `[refine continuous_sub _ _]
+@[tidy] meta def apply_continuous_mul := `[refine continuous_mul _ _]
+@[tidy] meta def apply_continuous_const := `[exact continuous_const]
+
+open tactic
+
+meta def continuity_tactics : list (tactic string) :=
+[
+  backwards_reasoning,
+  auto_cases,
+  tactic.interactive.apply_assumption    >> pure "apply_assumption",
+  tidy.run_tactics
+]
+
+meta def continuity (cfg : tidy.cfg := {}) : tactic unit :=
+let cfg' := { tactics := continuity_tactics, ..cfg } in
+tidy cfg'
+
+meta def continuity' : tactic unit := continuity
+#+end_src
+
+The only other thing to comment here is that =continuous.comp= has to
+be dealt with separately.  As Reid put it in chat:
+
+#+begin_quote
+blindly applying =continuous.comp= is not a good idea [...] even if
+the function we're trying to prove continuous is not visibly a
+composition, applying =continuous.comp= will succeed in writing it as
+the composition of itself and the identity.
+#+end_quote
+
+However, as I mentioned in the introduction to this note, Reid's
+tactic did not actually work on my example.  Specifically, it was not
+able to run =continuous.comp= properly.
+
+#+begin_src lean
+import homotopy_theory.topological_spaces.tactic analysis.complex.exponential
+
+open real
+
+@[tidy] meta def apply_continuous_sin := `[apply continuous_sin]
+
+-- this works
+lemma continuous_sin_sin' : continuous (λ x : ℝ, sin(sin x)) := 
+begin
+refine continuous.comp _ _,
+continuity,
+end
+
+-- fails (times out)
+lemma continuous_sin_sin : continuous (λ x : ℝ, sin(sin x)) := 
+begin
+continuity,
+end
+
+-- fails (times out)
+lemma continuous_sin_sin_sin : continuous (λ x : ℝ, sin(sin(sin x))) := 
+begin
+refine continuous.comp _ _,
+continuity,
+end
+#+end_src
+
+** Observations
+
+I'm glad to be able to actually write and debug a working tactic.  I
+would have been happy to discover Reid's tactic earlier, but it looks
+as though it has only been around for a month as of the time of
+writing.
+
+**  List of relevant files
+
+=/Users/joe/Dropbox/From Joe/OTHER/continuity-tactic/sin_sin.lean=

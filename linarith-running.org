@@ -1,0 +1,324 @@
+#+TITLE: Work outline 25 March - 10 May 2019
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:nil
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+* DONE Get the Mathematica-Lean bridge working with =linarith= & other existing tactics.
+SCHEDULED: <2019-03-25 Mon>
+DEADLINE: <2019-03-28 Thu>
+   :PROPERTIES:
+   :Effort: 4 days
+   :Away: 1 day off (Monday)
+   :END:
+** CODE AND COMMENTS
+
+*** Objective 1: using =linarith= from inside Mathematica :working:
+<<Objective 1>>The main change needed for this objective was a two-line adjustment to utils.lean. Specifically, I now =import= some additional tactics, and invoke them within the =finish= tactic.  The changes are on lines 1 and 131 of the mentioned file.
+
+#+BEGIN_SRC lean
+import mathematica data.real.basic tactic.ring tactic.linarith
+-- ...
+meta def finish : tactic unit :=
+assumption <|> contradiction <|> triv <|> `[linarith] <|> `[ring1]
+#+END_SRC
+
+I can now successfully run examples like these from within Mathematica:
+
+#+begin_src wolfram
+(* "∀ (x : ℝ), 2 + x ≥ 1 + x" *)
+ProveUsingLeanTactic[
+ ForAllTyped[{x}, real,
+  GreaterEqual[x + 2, 1 + x]], "`[mm_prover]", LeanExecutable]
+
+(* "∀ (x y : ℝ), x > y → 2 + x ≥ 1 + y" *)
+ProveUsingLeanTactic[
+ ForAllTyped[{x, y}, real,
+  Implies[x > y,
+   GreaterEqual[x + 2, 1 + y]]], "`[mm_prover]", LeanExecutable]
+#+end_src
+
+*** Objective 2:  using =ring1= from inside Mathematica            :adjusted:
+
+I had initially planned to use =ring=, but that fails.  In the Lean code listed in [[Objective 1]], I included the =ring1= tactic as another finisher, and that's the correct version of the tactic to call.   With this tactic in place, =mm_prover= can handle results like this:
+
+*In>*
+#+begin_src wolfram
+(* ∀ (x y : ℝ), (x + y) ^ 2 = x ^ 2 + 2 * x * y + y ^ 2" *)
+ProveUsingLeanTactic[
+ ForAllTyped[{x, y}, real, 
+  Equal[Power[x + y, 2], 
+   x^2 + 2*x*y + y^2]], "`[mm_prover]", LeanExecutable, True]
+#+end_src
+
+It took a few additional steps to get this working.  At first, the Mathematica code in my example was not getting translated over to Lean properly.  Upon examination, it turned out there wasn't a rule for translating =Power=, so I added one in mathematica.lean.  This is a direct variation of the rule for =Times=.
+
+#+begin_src lean
+@[app_to_pexpr_keyed]
+meta def pow_to_pexpr : app_trans_pexpr_keyed_rule :=
+⟨"Power",
+λ env args, do args' ← monad.mapm (pexpr_of_mmexpr env) args,
+               return $ pexpr_fold_op ```(1) ```(has_pow.pow) args'⟩
+#+end_src
+
+At first,  =mm_prover= was not still able to drive through the proof, because I was still using the =ring= tactic instead of =ring1=.  However, after a round of debugging (described in the notes below) I noticed that calls to =ring= resulted in proof attempts just stopping.  Looking at the code for =ring=, I noticed that it invokes =interactive.loc.ns= and fails if it can't match the location.  This made me suspicious, and when I tested =ring1= it worked without further problem.
+
+** HOW TO RUN THE CODE
+
+*** Running my sample Mathematica file.
+My file TacticsExamples.nb can be loaded into Mathematica 11.3, and evaluated line by line with Shift+Enter. 
+
+Before running the code you will most likely need to change the two lines below to point to the corresponding directories and files in your installation for the Mathematica bridge.  
+
+#+begin_src text
+SetDirectory["/afs/inf.ed.ac.uk/user/j/jcorneli/bridge/_target/deps/mm_lean/src"]
+<< "/afs/inf.ed.ac.uk/user/j/jcorneli/bridge/_target/deps/mathematica/src/lean_form.m"
+#+end_src
+
+*** Installing the bridge.
+Instructions regarding preliminary Lean requirements are available at https://github.com/leanprover-community/mathlib/blob/master/docs/elan.md.
+
+To install the /upstream/ versions of the files, run the following commands.
+
+#+begin_src text
+leanpkg +3.4.2 new bridge
+leanpkg add leanprover/mathlib
+leanpkg add robertylewis/mathematica
+leanpkg add minchaowu/mm-lean
+#+end_src
+
+Alternatively, to load my modified versions of the files, substitute holtzermann17/mathematica and holtzermann17/mm-lean instead (recommended).  The remaining build instructions are the same in either case.
+
+You will need to modify leanpkg.path in the bridge directory to get all the dependencies set up before building.  The file should look like this:
+
+#+begin_src text
+builtin_path
+path _target/deps/mathlib/src
+path _target/deps/mathematica/src
+path _target/deps/mm-lean/src
+path ./src
+#+end_src
+
+Then you can build the dependencies by running:
+
+#+begin_src text
+$ lean --make _target/deps/mathematica
+$ lean --make _target/deps/mm-lean
+#+end_src
+
+** NOTES
+
+1. It seems it should be possible to use whatever tactics one wishes as "finishers" in connection with the =mm_prover=, however, as we've seen in the two examples, in practice, the translation system and the prover may need some adjustments to work with different examples.
+2. One technical observation is that there is a noticeable slowdown associated with loading the extra files in line 1 of utils.lean.  I wonder if a future version of the bridge could include a dispatch service that only loads the tactics that are actually needed?  Lean running in server mode might address the same basic issue, since tactics would be loaded as-needed and then, presumably, stay around for applications in future calls.
+3. In order to get the =ring= proof working, I needed to dive into debugging.  It would be good to understand how to get still more information out. There is a very nice tutorial about tactics here, with some pointers that could be explored further: https://github.com/leanprover-community/mathlib/blob/master/docs/extras/tactic_writing.md
+4. I'd still like to understand better why it is that =ring= breaks the proof and =ring1= doesn't.  That seems like something that the people on Zulip might have some comments about.
+
+** SAMPLE OUTPUT
+
+/I have truncated the results of the generated proofs by using the =Short= command, because the actual output is very long.  I have included an example of non-abbreviated output in ring1-example.txt in the Dropbox./
+
+#+begin_src wolfram
+(* "∀ (x : R), 2 + x ≥ 1 + x" *)
+Short[ProveUsingLeanTactic[ForAllTyped[{x}, real, GreaterEqual[x + 2, 1 + x]], "`[mm_prover]", LeanExecutable, True]]
+
+Out[ ¤ ]//Short= LeanLambda[LeanNameMkString["h", LeanNameAnonymous], BinderInfoDefault ... anNameMkString["real", LeanNameAnonymous]], LeanLevelListNil]]]]]]]]]]
+
+(* "∀ (x y : R), x > y → 2 + x ≥ 1 + y" *)
+Short[ProveUsingLeanTactic[ ForAllTyped[{x, y}, real, Implies[x > y, GreaterEqual[x + 2, 1 + y]]], "`[mm_prover]", LeanExecutable, True]]
+
+Out[ ¤ ]//Short= LeanLambda[LeanNameMkString["h", LeanNameAnonymous], BinderInfoDefault ... NameMkString["real", LeanNameAnonymous]], LeanLevelListNil]]]]]]]]]]]]
+
+(* "∀ (x y : R), (x + y) ^ 2 = x ^ 2 + 2 * x * y + y ^ 2" *)
+Short[ProveUsingLeanTactic[ForAllTyped[{x, y}, real, Equal[Hold[Power[x + y, 2]], Hold[x ^ 2 + 2 * x * y + y ^ 2]]],"`[mm_prover]", LeanExecutable, True]]
+
+Out[ ¤ ]= LeanLambda[LeanNameMkString["h", LeanNameAnonymous], BinderInfoDefault ... NameMkString["real", LeanNameAnonymous]], LeanLevelListNil]]]]]]]]]]]]
+#+end_src
+
+* APPENDIX
+
+Here are some notes that document my work process.
+
+** Observations
+*** Lean can do linear arithmetic proofs in interactive mode 	    :working:
+
+#+BEGIN_SRC lean
+example (x : ℝ) : 2+x ≥ 1+x := begin linarith, end
+#+END_SRC
+
+*** Syntax and proofs for examples with "no antecedent"               :working:
+<<noantecedent fails>> These examples illustrate some mistakes and a working example.
+#+BEGIN_SRC lean
+example ∀ (x : ℝ), 2 + x ≥ 1 + x := begin linarith, end          --wrong syntax
+example : ∀ (x : ℝ), 2 + x ≥ 1 + x := begin linarith, end        --correct syntax, wrong proof
+example : ∀ (x : ℝ), 2 + x ≥ 1 + x := begin intro, linarith, end --this works
+#+END_SRC
+
+*** The provided examples have no antecedent, and the proofs go through :working:
+
+*In>*
+#+BEGIN_SRC wolfram
+DebugUsingLeanTactic[
+ ForAllTyped[{p, q, r}, Prop, 
+  Implies[Implies[p, Implies[q, r]], 
+   Implies[And[p, q], r]]], "mm_prover", LeanExecutable]
+#+END_SRC
+
+*Out>*
+#+BEGIN_SRC lean
+"∀ (p q r : Prop), (p → q → r) → p ∧ q → r"
+#+END_SRC
+
+*In>*
+#+BEGIN_SRC wolfram
+ProveUsingLeanTactic[
+ ForAllTyped[{p, q, r}, Prop, 
+  Implies[Implies[p, Implies[q, r]], 
+   Implies[And[p, q], r]]], "mm_prover", LeanExecutable]
+#+END_SRC
+
+*Out>*
+#+BEGIN_SRC lean
+"fun (h : Prop) (h_1 : Prop) (h_2 : Prop) (h_3 : h -> h_1 -> h_2) \
+(h_4 : and h h_1), (h_3 (and.left h h_1 h_4) (and.right h h_1 h_4))"
+#+END_SRC
+
+*** Conclusion: the ljt prover takes care of intros
+More specifically, looking at =apply_nonsplitting_rules= in ljt.lean, I see that it uses =intro_fresh=.
+
+*** The prover in ljt.lean depends on several lemmas about implications in util.lean
+"Useful lemmas":
+#+BEGIN_SRC lean
+def ljt_lemmas := [`imp_of_or_imp_left,
+                   `imp_of_or_imp_right,
+                   `uncurry,
+                   `imp_false_of_not,
+                   `nested_imp_elim,
+                   `id_locked,
+                   `absurd]
+#+END_SRC
+
+** Actions taken
+*** =debug_using_tac= added to main.lean                            :working:
+This is a modified version of =prove_using_tac= that just prints the translation from abstract syntax to Lean code.
+
+Example: invoking lean on the generated file temp.lean works as follows:
+
+*In>*
+#+BEGIN_SRC lean
+import main
+open tactic.interactive
+run_cmd debug_using_tac (mm_prover) "AY[ForAllTyped][AY[List][Y[p],Y[q],Y[r]],Y[Prop],AY[Implies][AY[Implies][Y[p],AY[Implies][Y[q],Y[r]]],AY[Implies][AY[And][Y[p],Y[q]],Y[r]]]]" ff >>= write_string
+#+END_SRC
+
+*Out>*
+#+BEGIN_SRC lean
+∀ (p q r : Prop), (p → q → r) → p ∧ q → r
+#+END_SRC
+
+*** =debug_using_tac= is integrated into the =DebugUsingLeanTactic= function in main.m :working:
+<<debug linarith example>>
+Example:
+
+*In>*
+#+BEGIN_SRC wolfram
+DebugUsingLeanTactic[
+ ForAllTyped[{x}, real, 
+  GreaterEqual[x + 2, 1 + x]], "`[linarith]", LeanExecutable, True]
+#+END_SRC
+
+*Out>*
+#+BEGIN_SRC lean
+∀ (x : ℝ), 2 + x ≥ 1 + x
+#+END_SRC
+*** =translate_trace= added to main.lean, with examples in examples.lean :working:
+
+I made a simple variant of =translate= that outputs tracing information.
+
+#+begin_src lean
+meta def translate_trace (mm_fml : string) : tactic string :=
+do f ← preprocess mm_fml >>= pp,
+   tactic.trace f.to_string,
+   return f.to_string
+#+end_src
+
+This way I could debug the translations from abstract syntax.
+
+#+begin_src lean
+example : true :=
+begin
+  -- ∀ (x : ℝ), 2 + x ≥ 1 + x 
+  translate_trace "AY[ForAllTyped][AY[List][Y[x]],Y[real],AY[GreaterEqual][AY[Plus][I[2],Y[x]],AY[Plus][I[1],Y[x]]]]",
+  -- ∀ (x y : ℝ), (x + y) ^ 2 = x ^ 2 + 2 * x * y + y ^ 2
+  translate_trace "AY[ForAllTyped][AY[List][Y[x],Y[y]],Y[real],AY[Equal][AY[Power][AY[Plus][Y[x],Y[y]],I[2]],AY[Plus][AY[Power][Y[x],I[2]],AY[Times][I[2],Y[x],Y[y]],AY[Power][Y[y],I[2]]]]]",
+  -- ∀ (x y : ℝ), (x + y) ^ 2 = x ^ 2 + 2 * x * y + y ^ 2
+  translate_trace "AY[ForAllTyped][AY[List][Y[x],Y[y]],Y[real],AY[Equal][AY[Hold][AY[Power][AY[Plus][Y[x],Y[y]],I[2]]],AY[Hold][AY[Plus][AY[Power][Y[x],I[2]],AY[Times][I[2],Y[x],Y[y]],AY[Power][Y[y],I[2]]]]]]",
+  trivial,
+end
+#+end_src
+*** Tactic mode proofs with =ring= and =linarith= are similar       :working:
+Once I got the =ring= example translated over properly and found the proof still did not go through, my first debugging step was to notice that the tactic mode proof is straightforward, and also similar the example for =linarith=.
+
+#+begin_src lean
+import tactic.ring data.real.basic
+example : ∀ (x : ℝ), 2 + x ≥ 1 + x := begin intro, linarith, end				--works
+example : ∀ (x y : ℝ), (x + y) ^ 2 = x ^ 2 + 2 * x * y + y ^ 2 := begin intros x y, ring, end	--works
+#+end_src
+
+This suggested that the next step would be to debug =mm_prover=, and, specifically, to debug =finish=.
+*** Debugging =finish= :working:
+Here is how I instrumented =finish=.
+
+#+begin_src lean
+meta def finish : tactic unit :=
+do {tactic.unsafe_run_io $ io.print_ln "assumption",
+assumption}
+<|>
+do {tactic.unsafe_run_io $ io.print_ln "contradiction",
+contradiction
+}
+<|>
+do {tactic.unsafe_run_io $ io.print_ln "triv",
+triv
+}
+<|>
+do {tactic.unsafe_run_io $ io.print_ln "linarith",
+`[linarith]
+}
+<|>
+do {tactic.unsafe_run_io $ io.print_ln "ring",
+`[ring1]
+}
+#+end_src
+
+One particularly nice thing about these debugging instructions is that they work both on the command line and interactively inside the editor.  Thus, for example,
+
+#+begin_src lean
+import main
+open tactic.interactive
+-- When debugging information has been inserted, `run_cmd` turns blue here
+run_cmd prove_using_tac (`[mm_prover]) "AY[ForAllTyped][AY[List][Y[x],Y[y]],Y[real],AY[Equal][AY[Power][AY[Plus][Y[x],Y[y]],I[2]],AY[Plus][AY[Power][Y[x],I[2]],AY[Times][I[2],Y[x],Y[y]],AY[Power][Y[y],I[2]]]]]" tt >>= write_string
+#+end_src
+... and saving this file and invoking lean on it, I also see the trace on the command line.
+
+This way I could see that calling =ring= terminates the proof, whereas similar proofs using =linarith= went through several cycles.  
+
+**  List of relevant files
+- Mathematica file with examples in it ::
+file://~/work/TacticsExamples.nb  /Examples to illustrate the code, excerpts copied above./
+- Mathematica file for testing ::
+file://~/work/BridgeRunning.nb  /More examples./
+- Working directory ::
+file://~/work/bridge/_target/deps/mm_lean/src  /Most of the code for Lean is in here./
+- Main Lean file :: 
+file://~/work/bridge/_target/deps/mm_lean/src/main.lean /I adjusted this to load tactic.ring and tactic.linarith. I think loading the extra code makes the process slower than it was before./ 
+- Main Mathematica file :: 
+file://~/work/bridge/_target/deps/mm_lean/src/main.m   /Translate mathematica syntax to Lean syntax. ...I just added some comments, trying to understand how this works better./
+- Examples running directly in Lean :: 
+file://~/work/bridge/_target/deps/mm_lean/examples.lean /This contains the examples I would like to replicate. ...and one non-working example that seems like a clue./

@@ -1,0 +1,400 @@
+#+TITLE: Continuity proofs over sets
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:t
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \usepackage[dvipsnames]{xcolor}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+#+LATEX_HEADER: \newfontfamily\scshape[Letters=SmallCaps,Scale=1,Color=Maroon]{GoSmallcaps}
+* ACTIVE Explore alternative approaches to continuity proofs
+SCHEDULED: <2019-04-01 Mon>
+DEADLINE: <2019-04-05 Fri>
+
+** Introduction
+
+How do alternative approaches to continuity proofs, in particular, using sets defined via predicates, compare with other available styles of proof?  Specifically, how do they compare with the continuity proofs on \(\mathbb{R}\) in mathlib, and my example of a proof of continuity of \(1/x\) on \(\mathbb{R}^*\), from January, in which I hand-constructed this space as a subtype of the reals?
+
+** CODE AND COMMENTS
+*** Objective 1: prove that \(1/x\) is continuous on \(\mathbb{R}^*\) (defined using sets) :working:
+<<Objective 1>>The proof is modelled loosely on "[[Exercise 2][Exercise 2]]" in the Appendix.
+#+begin_src lean
+import topology.basic data.set.intervals analysis.exponential 
+open real set
+
+-- It's easy to define the underlying set, and a restricted version of the function
+def punctured_line := (Iio (0:ℝ)) ∪ (Ioi (0:ℝ))
+noncomputable def punctured_inv := function.restrict (λ (x:ℝ), 1/x) punctured_line
+
+lemma punctured_reals_are_nonzero : ∀ (a : subtype punctured_line), a.val ≠ 0 :=
+begin
+intro,
+-- we can decompose the property using cases
+cases a.2 with l r,
+have h : a.val < 0, from mem_Iio.mp l, 
+have h1 : a.val ≠ 0, from ne_of_lt h,
+exact  h1,
+have k : a.val > 0, from mem_Ioi.mp r, 
+have k1 : a.val ≠ 0, from (ne_of_lt k).symm,
+exact  k1,
+end
+
+-- ... we simply need to know that all of the possible arguments are nonzero
+lemma cont_punctured_inv : continuous punctured_inv :=
+begin
+  unfold punctured_inv function.restrict,
+  simp only [one_div_eq_inv],
+  exact continuous_inv punctured_reals_are_nonzero continuous_subtype_val,
+end
+#+end_src
+*** Objective 2: prove that $\mathrm{tan}(x)$ is continuous where $\mathrm{cos}(x)$ is nonzero :working:
+
+This is done in mathlib, but what does the proof look like if we use
+sets instead of subtypes?  My guess, now that I've looked at these
+things a bit, is that it will be the same.  Indeed, this goes through,
+and makes good on the promise in Lean's documentation: "Any set can be
+used where a type is expected, in which case the set will be coerced
+into the corresponding subtype." (See [[sets-and-subtypes]].)
+
+#+begin_src lean
+def cos_nonzero_set := {x : ℝ | cos x ≠ 0} 
+
+-- minor change from the mathlib version
+lemma continuous_tan' : continuous (λ x : cos_nonzero_set, tan x) :=
+by simp only [tan_eq_sin_div_cos]; exact
+continuous_mul
+  (continuous_subtype_val.comp continuous_sin)
+  (continuous_inv subtype.property
+    (continuous_subtype_val.comp continuous_cos))
+#+end_src
+
+For variety, here is a version that works on one of tangent's "tiles".
+
+#+begin_src lean
+def tangent_tile := (Ioo (-(pi/2):ℝ) (pi/2))
+
+lemma tangent_tile_reals_are_nonzero : ∀ (a : subtype tangent_tile), cos a.val ≠ 0 :=
+begin
+intro,
+cases a.2 with l r,
+have h : cos(a.val) > 0, from (cos_pos_of_neg_pi_div_two_lt_of_lt_pi_div_two l r),
+have h1 : cos(a.val) ≠ 0, from (ne_of_lt h).symm,
+exact h1,
+end
+
+-- minor change from the mathlib version
+lemma continuous_tan' : continuous (λ x : tangent_tile, tan x) :=
+by simp only [tan_eq_sin_div_cos]; exact
+continuous_mul
+  (continuous_subtype_val.comp continuous_sin)
+  (continuous_inv tangent_tile_reals_are_nonzero
+    (continuous_subtype_val.comp continuous_cos))
+#+end_src
+
+*** Objective 3: Instantiate \([0,2]\) as a subtype and prove that \(x\) is continuous on this interval :working:
+<<Objective 3>>The "easy way" to produce the subtype is to create the set, and then coerce it.  The following code demonstrates that approach. Using the subset "where a type is expected" (sets.md) is perfectly equivalent.
+
+#+begin_src lean
+def two_interval_set := (Icc (0:ℝ) 2) 
+
+theorem continuous_id_on_tworeal' : continuous (λ (x : ↥two_interval_set), x) := 
+begin
+exact continuous_id,
+end
+
+theorem continuous_id_on_tworeal'' : continuous (λ (x : two_interval_set), x) := 
+begin
+exact continuous_id,
+end
+#+end_src
+
+However, if we create an intermediate definition for the coerced set, then we loose the association with ℝ as a topological space, which then has to be reinstated with =apply_instance=.  This looks like the pattern "[[shorthand][Shorthand considered harmful]]".  As I mentioned in [[nzreals]], in general there's more going with coercions than what we see here.
+
+#+begin_src lean
+-- Store the coercion to a type here
+def coerced_two_interval_subtype := ↥two_interval_set
+
+-- Without this line, the following proof breaks
+noncomputable instance : topological_space coerced_two_interval_subtype := by unfold coerced_two_interval_subtype; apply_instance
+
+theorem continuous_id_on_tworeal : continuous (λ (x : coerced_two_interval_subtype), x) := 
+begin
+exact continuous_id,
+end
+#+end_src
+
+** HOW TO RUN THE CODE
+
+I've copied the code related to the three objectives above into [[file:~/Dropbox/From%20Joe/OTHER/predicates/continuity_examples.lean][~/Dropbox/From Joe/OTHER/predicates/continuity_examples.lean]].  The examples will run in a Lean 3.4.2-enabled editor. Alternatively, I have put =#print= commands in the file, and running lean on the file on the command line produces output, which I have copied into Section [[output]].
+
+** NOTES
+
+*** General reflections
+
+This style of working would be relevant to dealing with the function defined by cases that Ursula mentioned: $f$ is 0 away from 0 and \(1/x\) at 0.  This function would serve as a shibboleth for making sense of division by zero.  It may be best to investigate this example using the partial function machinery.
+
+*** Comparison of the various attempts
+
+The version with the =nzreals= type that I created earlier (see [[nzreals]] below) is much "heavier".  Working with sets, I saw that the "boilerplate" code that goes into creating a type that you can do algebra on wasn't actually needed for the kinds of continuity proofs I was doing.
+
+** SAMPLE OUTPUT
+<<output>>Some example proof terms serve to illustrate what Lean's elaborator fills in for the proofs above.
+
+#+begin_src lean
+theorem cont_punctured_inv : continuous punctured_inv :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space (subtype punctured_line)] [_inst_2 : topological_space ℝ]
+       (f f_1 : subtype punctured_line → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+        punctured_inv
+        (λ (x : subtype punctured_line), 1 / x.val)
+        (eq.trans punctured_inv.equations._eqn_1
+           (function.restrict.equations._eqn_1 (λ (x : ℝ), 1 / x) punctured_line))))
+  (eq.mpr
+     (id
+        ((λ [_inst_1 : topological_space (subtype punctured_line)] [_inst_2 : topological_space ℝ]
+          (f f_1 : subtype punctured_line → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+           (λ (x : subtype punctured_line), 1 / x.val)
+           (λ (x : subtype punctured_line), (x.val)⁻¹)
+           (funext (λ (x : subtype punctured_line), one_div_eq_inv (x.val)))))
+     (continuous_inv punctured_reals_are_nonzero continuous_subtype_val))
+
+theorem continuous_1_over_x'' : continuous (λ (x : ↥{r : ℝ | r ≠ 0}), 1 / ↑x) :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space ↥{r : ℝ | r ≠ 0}] [_inst_2 : topological_space ℝ]
+       (f f_1 : ↥{r : ℝ | r ≠ 0} → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+        (λ (x : ↥{r : ℝ | r ≠ 0}), 1 / ↑x)
+        (λ (x : ↥{r : ℝ | r ≠ 0}), (↑x)⁻¹)
+        (funext (λ (x : ↥{r : ℝ | r ≠ 0}), one_div_eq_inv ↑x))))
+  (continuous_inv subtype.property continuous_subtype_val)
+
+theorem continuous_tan' : continuous (λ (x : ↥cos_nonzero_set), tan ↑x) :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space ↥cos_nonzero_set] [_inst_2 : topological_space ℝ]
+       (f f_1 : ↥cos_nonzero_set → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+        (λ (x : ↥cos_nonzero_set), tan ↑x)
+        (λ (x : ↥cos_nonzero_set), sin ↑x / cos ↑x)
+        (funext (λ (x : ↥cos_nonzero_set), tan_eq_sin_div_cos ↑x))))
+  (continuous_mul (continuous.comp continuous_subtype_val continuous_sin)
+     (continuous_inv subtype.property (continuous.comp continuous_subtype_val continuous_cos)))
+#+end_src
+
+* APPENDIX
+
+Here are some notes that document my work process.
+
+** Observations
+*** In Lean, sets are defined using predicates and can be coerced into subtypes
+<<sets-and-subtypes>>The following points in Lean's documentation ([[https://github.com/leanprover-community/mathlib/blob/master/docs/theories/sets.md#sets-and-subtypes][=sets.md=]]) are relevant to the development.
+
+1. "A set is defined as a predicate"
+2. "Any set can be used where a type is expected, in which case the set will be coerced into the corresponding subtype."
+3. "It is possible to coerce an element of this subtype back into [an element of the supertype]."
+
+*** Variant versions of =continuous= relevant to these problems are now available
+
+In December, some [[https://github.com/leanprover-community/mathlib/commit/f5d73bdd1376304f9ac6b5c06cbe89d7162c22ba#diff-e5b26efbb6ead9f50b4cfd7c0b04a07f][variant]] versions of =continuous= were added to mathlib by Jeremy Avigad, namely =continuous_at=, =continuous_at_within= and =continuous_on=.  There are also some associated [[https://github.com/leanprover-community/mathlib/commit/f5d73bdd1376304f9ac6b5c06cbe89d7162c22ba#diff-e5b26efbb6ead9f50b4cfd7c0b04a07fR111][lemmas]] in the commit, which relevant for the examples that I have in mind.  In particular, I used =continuous_on_iff_continuous_restrict= (in order.lean).
+
+*** Some support for continuity and partial functions is now available as well
+A definition for =pcontinuous= and two lemmas =open_dom_of_pcontinuous= and =pcontinuous_iff'= are in basic.lean.
+This wasn't immediately needed for my examples but looks like something to explore later.
+
+*** Variations on the "glue lemma"
+
+In Exercise 2, the lemma "=ounit_items_map_nonzero=" is reminiscent of
+the =glue_lemma= we've discussed earlier.
+
+*** Pattern: "lift" proofs about restricted functions
+
+If the pattern in Exercises [[Exercise 1][1]] and [[Exercise 2][2]] extends, the main work goes into
+proving that the restricted function is continuous, then we can use
+=continuous_on_iff_continuous_restrict= to "lift" the proof to ℝ.
+
+*** Pattern: Shorthand considered harmful
+<<shorthand>>When working on [[Objective 1][Objective 1]], I got stuck when I introduced a seemingly innocuous shorthand.
+#+begin_src lean
+def punctured_line := (Iio (0:ℝ)) ∪ (Ioi (0:ℝ))
+noncomputable def punctured_inv := function.restrict (λ (x:ℝ), 1/x) punctured_line
+
+lemma punctured_reals_are_nonzero : ∀ (a : subtype punctured_line), a.val ≠ 0 :=
+begin
+intro,
+let a2 := a.2,                         -- (a.property)
+cases a2 with l r,                     -- we can decompose the property using cases
+have h : a.val < 0, from mem_Iio.mp l,
+have h1 : a.val ≠ 0, from ne_of_lt h,  -- This is the relevant fact
+exact h1,                              -- *** But I can't close the case here
+end
+#+end_src
+
+I tried closing it with =sorry=, and got this error:
+
+#+begin_src text
+infer type failed, function expected at
+  (let a2 : punctured_line (a.val) := a.property in a.val ≠ 0) (or.inl l)
+term
+  let a2 : punctured_line (a.val) := _
+  in a.val ≠ 0
+has type
+  Prop
+state:
+2 goals
+a : subtype punctured_line,
+l : a.val ∈ Iio 0,
+h : a.val < 0,
+h1 : a.val ≠ 0
+⊢ (let a2 : punctured_line (a.val) := a.property in a.val ≠ 0) (or.inl l)
+
+case or.inr
+a : subtype punctured_line,
+r : a.val ∈ Ioi 0
+⊢ (let a2 : punctured_line (a.val) := a.property in a.val ≠ 0) (or.inr r)
+#+end_src
+
+Sebastien Gouezel pointed out on Zulip that the kind of shorthand I used when defining =a2= is not actually handled by the kernel, and therefore can cause problems.
+
+** Actions taken
+*** Exercise 1: continuity of $x$ on the unit interval
+<<Exercise 1>>I was able to work out a simple example without too much difficulty.
+#+begin_src lean
+-- Give a handle on the set [0,1] ⊂ ℝ
+def unit_interval := (Icc (0:ℝ) 1)
+-- Define an identity function on the subtype corresponding to this set
+def restricted_id := function.restrict (λ (x:ℝ), x) unit_interval
+
+-- show that restricted_id is continuous
+lemma cont_restricted_id : continuous restricted_id :=
+begin
+intro,
+intro,
+apply continuous_subtype_val _,
+exact a,
+end
+-- main idea: "getting the value of the subtype" unifies with "restricted_id"
+
+-- now show that the identity function (on ℝ) is continuous on the unit interval
+lemma continuous_on_unit_interval_id : continuous_on (λ (x:ℝ), x) unit_interval :=
+begin
+rw [continuous_on_iff_continuous_restrict],
+exact cont_restricted_id,
+end
+#+end_src
+
+*** Exercise 2: Post Zulip about "continuity of \(1/x\) on \((0,1]\)"
+<<Exercise 2>>I got stuck with this one, and when I posted on Zulip, Chris
+Hughes quickly offered a proof.  I worked through it until I
+understood what's going on.
+
+#+begin_src lean
+-- The proof above would break for 1/x, obviously.
+-- First of all, we can't just use subtype.val, since that won't unify.
+
+-- To give some hope that it will go through, let's start over with the interval (0,1].
+def ounit_interval := (Ioc (0:ℝ) 1)
+
+noncomputable def restricted_inv := function.restrict (λ (x:ℝ), 1/x) ounit_interval
+
+-- For illustrative purposes...
+-- Here is a tactic mode proof of the compressed step in Chris's version of the lemma
+lemma ounit_items_are_nonzero : ∀ (a : subtype ounit_interval), a.val ≠ 0 :=
+begin
+intro,                                   -- a : ↥ounit_interval
+let a2 := a.2,                           -- right (a.property)
+let a21 := a2.1,                         -- left (a.property.left), i.e. 0 < a.val
+simp [(ne_of_lt a21).symm],              -- 0 < a.val ⇒ a.val ≠ 0
+end
+
+-- Show that restricted_inv is continuous
+-- Chris Hughes helped me out with this one.
+lemma cont_restricted_inv : continuous restricted_inv :=
+begin
+  unfold restricted_inv function.restrict,
+  simp only [one_div_eq_inv],
+  exact continuous_inv (λ a, (ne_of_lt a.2.1).symm) continuous_subtype_val,
+end
+-- (line 2)
+-- Turn division into (multiplicative) inverse
+-- (line 3)
+-- satisfy the hypothesis that for all a in our topological space, f a ≠ 0
+-- ... by mapping each such a to a proof of that result
+-- satisfy the hypothesis that f is continuous
+
+-- redo using the tactic mode result instead
+lemma cont_restricted_inv' : continuous restricted_inv :=
+begin
+  unfold restricted_inv function.restrict,
+  simp only [one_div_eq_inv],
+  exact continuous_inv ounit_items_are_nonzero continuous_subtype_val,
+end
+
+-- now show that the 1/x (on ℝ) is continuous on the ounit interval
+lemma continuous_on_ounit_interval_inv : continuous_on (λ (x:ℝ), 1/x) ounit_interval :=
+begin
+rw [continuous_on_iff_continuous_restrict],
+exact cont_restricted_inv,
+end
+#+end_src
+
+
+** Old code for comparison
+*** Defining the nzreals type and proving \(1/x\) is continuous on this type
+<<nzreals>>Here I sum up how I approached the proof before.  This can be compared with [[Objective 1]] (which obtains the same result in a different way), and also with [[Objective 3]] (where we learned that if we use the set instead of the subtype we get some machinery for free).
+#+begin_src lean
+import analysis.exponential
+open real
+
+namespace nzreal
+
+def nzreal := {r : ℝ // r ≠ 0}
+notation `ℝ*` := nzreal
+constants nzc nzd : nzreal
+
+instance nzreal.one : has_one nzreal := ⟨⟨(1:ℝ), one_ne_zero⟩⟩
+
+noncomputable instance nzreal.div : has_div nzreal :=
+ ⟨λ q r, ⟨q.val / r.val, div_ne_zero q.property r.property⟩⟩
+
+noncomputable instance : topological_space ℝ* := by unfold nzreal; apply_instance
+
+end nzreal
+
+theorem continuous_1_over_x : continuous (λ (x : ℝ*), 1/x) := 
+continuous_subtype_mk _ $ continuous_mul
+  (continuous_subtype_val.comp continuous_const)
+  (real.continuous_inv subtype.property
+    (continuous_subtype_val.comp continuous_id))
+#+end_src
+
+What we've seen about how to work with sets suggests that there's yet another proof.  Ultimately, we don't actually need to set up the "boilerplate" code after all, because Lean can figure it out, if it is given the proper instructions.
+
+#+begin_src lean
+import analysis.exponential
+open real
+
+theorem continuous_1_over_x'' : continuous (λ (x : {r : ℝ | r ≠ 0} ), 1/(x:ℝ)) := 
+begin
+simp only [one_div_eq_inv],
+refine real.continuous_inv _ _,
+exact subtype.property,
+apply continuous_subtype_val,
+end
+#+end_src
+
+In this version, we need to tell Lean what to do with =x= (or we
+could do that for =1=) for the proof to work.  Writing
+=x.val⁻¹= would also suffice, because =x.val= is in the ambient type.  For
+instance, this is how the result =real.continuous_inv'= in real.lean
+is written.  (Johan Commelin gave me some pointers on Zulip that helped
+me understand this better.)
+
+**  List of relevant files
+
+- I've copied the code related to the three objectives above into [[file:~/Dropbox/From%20Joe/OTHER/predicates/continuity_examples.lean][~/Dropbox/From Joe/OTHER/predicates/continuity_examples.lean]].

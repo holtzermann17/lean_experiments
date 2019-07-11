@@ -1,0 +1,638 @@
+#+TITLE: Continuity proofs for IVP examples
+#+OPTIONS: prop:t p:t \n:nil ^:nil toc:t
+#+HTML_HEAD_EXTRA:  <STYLE type="text/css"> code {font-size: 120%; color: green;} </STYLE>
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist[itemize]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \setlist[enumerate]{itemsep=-10pt, nolistsep}
+#+LATEX_HEADER: \def\UrlBreaks{\do\/\do-}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage{hyperref}
+#+LATEX_HEADER: \usepackage{fontspec}
+#+LATEX_HEADER: \usepackage{unicode-math}
+#+LATEX_HEADER: \usepackage{mathtools}
+#+LATEX_HEADER: \usepackage[htt]{hyphenat}
+#+LATEX_HEADER: \usepackage[dvipsnames]{xcolor}
+#+LATEX_HEADER: \setmonofont[Scale=.8]{DejaVu Sans Mono}
+#+LATEX_HEADER: \newfontfamily\scshape[Letters=SmallCaps,Scale=1,Color=Maroon]{GoSmallcaps}
+* ACTIVE Continuity proofs for the examples in the paper (without new automation).
+SCHEDULED: <2019-04-08 Mon>
+DEADLINE: <2019-04-12 Fri>
+   :PROPERTIES: 
+   :Effort: 4 days
+   :Away: 1 day off (<2019-04-09 Tue 12:00> attend ILR interview in Glasgow)
+   :END:
+** Introduction
+I got the "Easy" ([[Example 1]], [[Example 2]]) and "Medium" ([[Example 3]],
+[[Example 4]]) that I had slated finished off as by-hand proofs.  The
+"Hard" examples ([[Example 5]], [[Example 6]]) did indeed turn out to be
+somewhat harder.
+
+For the first of these I tackled a simplified version in
+[[Variant Abs]] and for the other I sketched what I'm after and am hoping
+to get some feedback about it on Zulip.  I expect that I could
+finish these off with a bit more time (and some more Q&A).
+
+Paul gave me several points of advice on the work in Section [[Example 4]], which deals with completing the square.
+The example treate here is just the simple case, the one from the CICM
+paper.  In a more general treatment I'd deal with polynomials
+that factor over the reals as well.
+
+In Section [[Parsing in Tactics]], I put some notes from a conversation
+on Zulip about tactics.  This would give a start for an automation
+of completing the square.  That could be returned once there are a
+few more worked examples in hand.
+** CODE AND COMMENTS
+*** Example 1: $y(x)=1/(2-x)$ is continuous on [0,2) :working:
+<<Example 1>>This test involves a small amount of arithmetic composition; it is
+therefore slightly more complex than my super-basic running examples
+of $x$ and $1/x$.
+
+The main result roughly follows the outline of my earlier example, =cont_punctured_inv=.
+An error when plonking that proof in here tells about the first lemma we need.
+Then =sorry='ing that, I get an error that explains the other needed lemma.
+The types suggested by the errors are then copied above, and their proofs filled in.
+
+#+begin_src lean
+def twoco_interval := (Ico (0:ℝ) 2)
+
+noncomputable def simple_rational := function.restrict (λ (x:ℝ), 1/(x-2)) twoco_interval
+
+lemma simple_rational_of_twoco_items_are_nonzero :  ∀ (a : subtype twoco_interval), a.val - 2 ≠ 0 := 
+begin
+intro,
+cases a.2 with l r,
+-- Know: 0 ≤ a.val < 2
+--    ⇒      a.val < 2
+-- Show:  a.val -2 < 0
+have h, from sub_neg_of_lt r,      -- lemma for moving a term from the right to the left of  <
+exact (ne_of_lt h),
+end
+
+lemma simple_denom_over_twoco_interval_continuous : continuous (λ (x : subtype twoco_interval), (x.val - 2)) := 
+begin
+refine continuous_add _ _,
+apply continuous_subtype_val,
+exact continuous_const,
+end
+
+lemma simple_rational_cont : continuous simple_rational :=
+begin
+  unfold simple_rational function.restrict,
+  simp only [one_div_eq_inv],
+  exact continuous_inv simple_rational_of_twoco_items_are_nonzero
+                       simple_denom_over_twoco_interval_continuous,
+end
+#+end_src
+
+*** Example 2: $\mathrm{sin}(\mathrm{sin}(x))$ is continuous over [1,2] :working:
+<<Example 2>>This again deals with composition of functions, which are considered over an interval rather than over all of \(\mathbb{R}\).  This example also prepares for further examples based on composition in coming weeks.
+
+#+begin_src lean
+def onetwo_interval := (Icc (1:ℝ) 2)
+
+noncomputable def sin_sin := function.restrict (λ (x:ℝ), sin(sin(x))) onetwo_interval
+
+lemma sin_sin_cont : continuous sin_sin :=
+begin
+  unfold sin_sin function.restrict,
+  refine continuous.comp _ _,
+  apply continuous_subtype_val.comp, -- this deals with the subtype application
+  apply continuous_sin,
+  apply continuous_sin,
+end
+#+end_src
+
+To establish the pattern let's do it one more time.
+
+#+begin_src lean
+noncomputable def sin_sin_sin := function.restrict (λ (x:ℝ), sin(sin(sin(x)))) onetwo_interval
+
+lemma sin_sin_sin_cont : continuous sin_sin_sin :=
+begin
+  unfold sin_sin_sin function.restrict,
+  refine continuous.comp _ _,
+  refine continuous.comp _ _,
+  apply continuous_subtype_val.comp, -- notice that we only need this once
+  apply continuous_sin,
+  apply continuous_sin,
+  apply continuous_sin,
+end
+#+end_src
+*** Example 3: $y(x)=1/2-(1/2)e^{-x^2}$ is continuous on (i) =ℝ= and (ii) [0,1]. :working:
+<<Example 3>>This is part (i).  
+
+It basically looks like rippling: I trace the shape of the function and deal with each "hole" or "box" as it comes up.
+
+It is somewhat unexpected that =mul_neg_one= takes care of the continuity of -1, and that =continuous_neg= can't be used there instead.
+#+begin_src lean
+noncomputable def my_fun := (λ (x:ℝ), 1/2 - (1/2) * exp (-x^2))
+
+lemma my_fun_cont : continuous my_fun :=
+begin
+  unfold my_fun,
+  refine continuous_add _ _,
+  exact continuous_const,
+  refine continuous_neg _,
+  refine continuous_mul _ _,
+  exact continuous_const,
+  refine continuous.comp _ _,
+  simp [mul_neg_one],         -- * somewhat unexpected!
+  refine continuous_pow _,
+  exact continuous_exp,
+end
+#+end_src
+Part (ii) is similar, but again with a small surprise.
+#+begin_src lean
+def unit_interval := (Icc (0:ℝ) 1)
+noncomputable def my_fun_restricted := function.restrict my_fun unit_interval
+
+lemma my_fun_restricted_cont : continuous my_fun_restricted :=
+begin
+  unfold my_fun_restricted function.restrict,
+  refine continuous_add _ _,
+  exact continuous_const,
+  refine continuous_neg _,
+  refine continuous_mul _ _,
+  exact continuous_const,
+  refine continuous.comp _ _,
+  simp [mul_neg_one],
+  -- This part is different
+  simp only [pow_two],     -- * why doesn't refine  continuous_pow _ work here?
+  apply continuous_mul,
+  repeat {exact continuous_subtype_val},
+  -- End of different part
+  exact continuous_exp,
+end
+#+end_src
+*** Example 4: $y(x)=1/(x^2-2x+3)$ is continuous over [1,2].        :working:
+<<Example 4>>Here is a by-hand proof of the result.
+#+begin_src lean
+import topology.basic data.set.intervals analysis.complex.exponential data.complex.basic tactic.ring
+open real set
+open complex 
+
+-- Here's a way to start sketching, anyway.
+
+constants A B C : ℝ
+
+-- some specific quadratic
+noncomputable def quadratic := (λ (x:ℝ), A * (x^2) + B * x + C)
+
+-- take in some coefficients and generate the corresponding quadratic polynomial
+def quadratic_poly := (λ (a b c : ℝ), (λ (x:ℝ), a * (x^2) + b * x + c))
+
+-- Here's a useful lemma: also easy to prove.  We'll use this to prove the nonmonic case as well.
+lemma cs_monic (b c : ℝ) : ∀ (x:ℝ), x^2 + b*x + c = (x + b/2)^2 + (c-(b^2)/4) :=
+begin
+intro,
+ring,
+end
+-- use this for an example, e.g. x^2-2x+3, to show this one is continuous
+
+-- As a quick warm-up, the polynomial itself is continuous.
+-- A more general version of this result would say that *all* such polynomials are continuous.
+-- Is that a known result?  Anyway, this will do for now
+lemma cont_example_quad : continuous (quadratic_poly 1 (-2) 3) :=
+begin
+unfold quadratic_poly,
+refine continuous_add _ _,
+refine continuous_add _ _,
+refine continuous_mul _ _,
+exact continuous_const,
+exact continuous_pow 2,
+refine continuous_mul _ _,
+exact continuous_const,
+exact continuous_id,
+exact continuous_const,
+end
+
+-- Now let's set up 1/quad
+#check (λ (x:ℝ), 1/x)
+#check function.comp (λ (x:ℝ), 1/x) (quadratic_poly 1 (-2) 3)
+
+lemma example_inv_quad : continuous (function.comp (λ (x:ℝ), 1/x) (quadratic_poly 1 (-2) 3)) :=
+begin
+unfold quadratic_poly function.comp,
+-- the setup looks good.
+-- adjust it so that we can apply the lemma:
+simp only [one_div_eq_inv],
+refine real.continuous_inv _ _,
+intro x,
+rw one_mul,
+rw cs_monic,
+-- The first summand is (x + (-2) / 2) ^ 2
+-- which we deem to be nonnegative because it is a square;
+-- so it is sufficient to show the second summand is positive.
+-- But that's easy:
+-- (3 - (-2) ^ 2 / 4) = (3 - 4 / 4) = (3 - 1) = 2 > 0
+-- So let's apply these ideas.
+apply ne_of_gt,                 -- this is a sufficient condition
+apply add_pos_of_nonneg_of_pos, -- Break the proof into parts at the + sign
+rw pow_two,                     -- rewrite the square
+apply mul_self_nonneg,          -- draw the first required conclusion
+-- For the next part, we need to do a bit of arithmetic
+-- but we can let Lean do that for us.
+ring,
+norm_num,
+-- the last goal is the continuity of the polynomial
+exact cont_example_quad,
+end
+#+end_src
+I've also started sketching a tactic that would do this, but progress
+on that is incomplete at the moment.  See [[Parsing in Tactics]] for some
+preliminary work.
+
+# In the working example the denominator $x^2-2x+3$ uniquely factors as
+# $(x+1-i\sqrt{2})(x+1+i\sqrt{2})$, i.e., there are no real roots.  But mixing real and
+# complex maths might be more tricky than we need. You can rewrite quadratic polynomials
+# without going there.
+
+# # -- x^2+bx+c = (x + (1/2) b)^2 + (c-b^2/4)      -- monic case
+# The general rule is $ax^2+bx+c = a(x + (1/2a) b)^2 + (c-b^2/4a)$
+
+# # -- Ergo, roots found by setting the RHS equal to zero.
+
+# # -- a(x + (1/2a) b)^2 + (c-b^2/4a) = 0
+# # -- a(x + (1/2a) b)^2              = -(c-b^2/4a)
+# # --  (x + (1/2a) b)^2              = -(c-b^2/4a)/a
+# # --  (x + (1/2a) b)                = ± sqrt (-(c-b^2/4a)/a)
+# # --   x                            = ± sqrt (-(c-b^2/4a)/a) - (1/2a) b
+
+# # -- In particular, we can observe this corollary:
+# # -- if -(c-b^2/4a)/a < 0 i.e. c-b^2/4a > 0 i.e. c > b^2/4a  i.e. 4ac > b^2 i.e. 0 > b^2 - 4ac
+# # -- then there are no real roots.
+*** Example 5: $y(x) = (η e^{κx}-1)/κ$ (when $x ≤ ξ$) and $(η e^{κx}-e^{κ(x-ξ)})/κ$ (when $x > ξ$) (assuming $κ$ nonzero) is continuous on =ℝ= :simplified:
+<<Example 5>>The function can be defined easily enough:
+#+begin_src lean
+import data.real.basic data.complex.exponential 
+
+constants (ξ κ η : ℝ)
+open real
+
+noncomputable def cases_fun : ℝ → ℝ := 
+λ x, if x ≤ ξ
+     then (η * exp (κ * x) - 1)/κ
+     else (η * exp (κ * x) - exp (κ * (x-ξ)))/κ
+#+end_src
+It's possible to break the proof down into three parts: continuity
+of the =then= branch, continuity on the =else= branch,
+and showing that the function matches up on the boundary.
+The two branches are not so different from [[Example 3]].
+I've demonstrated the method on a simpler problem in [[Variant Abs]]
+(though the topology part of that proof isn't complete yet.)
+*** Example 6: The function $r(x) = 1$ (when $x ≤ ξ$) and $0$ (when $x > ξ$) is discontinuous over $[0,2]$, assuming $ξ=1$ :started:
+<<Example 6>>Defining the function is simple.
+#+begin_src lean
+import data.real.basic data.complex.exponential topology.basic data.set.intervals analysis.exponential order.filter.basic
+
+constants (ξ : ℝ)
+open real
+
+noncomputable def step_fun : ℝ → ℝ := λ x, if x ≤ ξ then 1 else 0
+#+end_src
+
+Now, analysis of this thing.  A relevant lemma in the library: =continuous_iff_continuous_at=
+our goal becomes: show that =∃ x, ¬ continuous_at f x=.  Clearly =ξ= is a good choice.
+The definition of =continuous_at= is in terms of neighbourhoods and filters.
+
+Looking again in the library, an example of a basic continuity proof is
+=tendsto_exp_zero_one= in analysis.exponential.  The proof relies on
+=tendsto_nhds_nhds=.  This lemma transforms the neighbourhoods/filters
+language into more typical epsilon/delta langauge.
+In addition, it's another if-and-only-if result, so we can use it here.
+
+Now, clearly you can choose points as close to =ξ= (/from the right/)
+as you wish, and their values will always be distance =1= away from =f ξ=.
+For example, setting =ε= to =1/2=, /there is no such/ =δ>0= 
+with the property that
+=∀ {x : ℝ}, dist x ξ < δ → dist (step_fun x) (step_fun ξ) < ε)=.
+
+But how to get this fact across to Lean?
+
+#+begin_src lean
+lemma discont_at_step : ¬ (continuous_at step_fun ξ) := begin
+unfold continuous_at,
+-- our goal:
+-- ⊢ ¬filter.tendsto step_fun (nhds ξ) (nhds (step_fun ξ))
+rw metric.tendsto_nhds_nhds,
+-- our goal:
+-- ⊢ ¬∀ (ε : ℝ),
+--      ε > 0 → (∃ (δ : ℝ) (H : δ > 0),
+--                ∀ {x : ℝ}, dist x ξ < δ → dist (step_fun x)
+--                                                 (step_fun ξ) < ε)
+end
+#+end_src
+
+
+** HOW TO RUN THE CODE
+
+Files in =~/Dropbox/From\ Joe/OTHER/paper_examples= contain source code for
+the examples here.  They can be interacted with in a Lean-enabled
+editor.  They are set up for work with Lean's mathlib =c3aba2=.  Note,
+mathlib has changed slightly since then.
+
+** NOTES
+*** General reflections
+1. Learning the proof mechanics has taken a lot of time.  Broadly, a lot of ground is covered here with more different kinds of proofs than in previous weeks.  There are still more kinds of proofs that I wasn't able to complete because I don't know the idioms.
+2. It occurs to me that more novice-friendly documentation could be an advantage for Lean (and Formal Abstracts) if it's really going to take off with a large contributor base.  For example, I've found it hard to get started with epsilon/delta proofs.  I know there are more examples of these that I could find and read (Kevin has posted examples), but these are a bit hard to track down.  It seems like every part of Lean could be given demo examples and exercises to do in a "drill" fashion.
+** SAMPLE OUTPUT
+
+Here is Lean's proof term for the first example:
+
+#+begin_src lean
+theorem simple_rational_cont : continuous simple_rational :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space (subtype twoco_interval)] [_inst_2 : topological_space ℝ]
+       (f f_1 : subtype twoco_interval → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+        simple_rational
+        (λ (x : subtype twoco_interval), 1 / (x.val - 2))
+        (eq.trans simple_rational.equations._eqn_1
+           (function.restrict.equations._eqn_1 (λ (x : ℝ), 1 / (x - 2)) twoco_interval))))
+  (eq.mpr
+     (id
+        ((λ [_inst_1 : topological_space (subtype twoco_interval)] [_inst_2 : topological_space ℝ]
+          (f f_1 : subtype twoco_interval → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+           (λ (x : subtype twoco_interval), 1 / (x.val - 2))
+           (λ (x : subtype twoco_interval), (x.val - 2)⁻¹)
+           (funext (λ (x : subtype twoco_interval), one_div_eq_inv (x.val - 2)))))
+     (continuous_inv simple_rational_of_twoco_items_are_nonzero simple_denom_over_twoco_interval_continuous))
+#+end_src
+
+Here is Lean's proof term for the second example:
+
+#+begin_src lean
+theorem sin_sin_cont : continuous sin_sin :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space (subtype onetwo_interval)] [_inst_2 : topological_space ℝ]
+       (f f_1 : subtype onetwo_interval → ℝ) (e_3 : f = f_1), congr_arg continuous e_3)
+        sin_sin
+        (λ (x : subtype onetwo_interval), sin (sin (x.val)))
+        (eq.trans sin_sin.equations._eqn_1
+           (function.restrict.equations._eqn_1 (λ (x : ℝ), sin (sin x)) onetwo_interval))))
+  (continuous.comp (continuous.comp continuous_subtype_val continuous_sin) continuous_sin)
+#+end_src
+
+Here is Lean's proof term for the therd example:
+
+#+begin_src lean
+theorem my_fun_cont : continuous my_fun :=
+eq.mpr
+  (id
+     ((λ [_inst_1 : topological_space ℝ] [_inst_2 : topological_space ℝ] (f f_1 : ℝ → ℝ) (e_3 : f = f_1),
+         congr_arg continuous e_3)
+        my_fun
+        (λ (x : ℝ), 1 / 2 - 1 / 2 * exp (-x ^ 2))
+        my_fun.equations._eqn_1))
+  (continuous_add continuous_const
+     (continuous_neg
+        (continuous_mul continuous_const
+           (continuous.comp
+              (eq.mpr
+                 (id
+                    ((λ [_inst_1 : topological_space ℝ] [_inst_2 : topological_space ℝ] (f f_1 : ℝ → ℝ)
+                      (e_3 : f = f_1), congr_arg continuous e_3)
+                       (λ (x : ℝ), -x ^ 2)
+                       (λ (x : ℝ), x ^ 2)
+                       (funext (λ (x : ℝ), neg_square x))))
+                 (continuous_pow 2))
+              continuous_exp))))
+#+end_src
+
+The proof term for the fourth example is considerably longer and omitted here.
+
+
+* APPENDIX
+** Actions taken
+*** Exercise: sin(sin(x)) and friends are continuous on =ℝ=
+This is slightly simpler than [[Example 2]].  It is largely an exercise
+in the use of =refine=.
+#+begin_src lean
+lemma continuous_sin_sin : continuous (λ x : ℝ, sin (sin x)) := 
+begin
+refine continuous.comp _ _,
+apply continuous_sin,
+apply continuous_sin,
+end
+
+lemma continuous_sin_sin_sin : continuous (λ x : ℝ, sin (sin (sin x))) := 
+begin
+refine continuous.comp _ _,
+refine continuous.comp _ _,
+apply continuous_sin,
+apply continuous_sin,
+apply continuous_sin,
+end
+
+lemma continuous_sin_sin_sin_sin : continuous (λ x : ℝ, sin (sin (sin (sin x)))) := 
+begin
+refine continuous.comp _ _,
+refine continuous.comp _ _,
+refine continuous.comp _ _,
+apply continuous_sin,
+apply continuous_sin,
+apply continuous_sin,
+apply continuous_sin,
+end
+#+end_src
+*** Help on Zulip: Parsing expressions inside tactics 
+<<Parsing in Tactics>>When my initial attempt at getting a tactic running didn't work,
+I asked on Zulip about it. Keely Hoek helped me get on the right footing.
+Below is the variant for a parsing tactic that Mario Carneiro suggested, though he cautioned
+"I think this kind of parsing is probably not a good idea in any case.
+It's very brittle."
+#+begin_src lean
+open tactic
+meta def trace_goal_is_quad_eq'' : tactic unit :=
+do { `(%%e₁ = %%r) ← target,
+     `(%%A * %%x ^ %%e + %%B * %%y + %%C) ← return e₁,
+     guard (x =ₐ y),
+     guard (e =ₐ `(2:ℕ)),
+     pA ← pp A, pB ← pp B, pC ← pp C, pr ← pp r,
+     tactic.trace $ ↑"Goal is equality between the quadratic "
+                     ++ pA ++ " x^2 + "
+                     ++ pB ++ " x + "
+                     ++ pC ++ " and " ++ pr }
+   <|> tactic.trace "Goal is not an equality"
+
+example (a b c : ℝ) : ∀ (x:ℝ), a*x^2+b*x+c = a*(x + (1/(2*a))* b)^2 + (c-b^2/(4*a)) :=
+begin
+  intro,
+  trace_goal_is_quad_eq'',
+end
+#+end_src
+*** Exercise: Cross-multiplication
+This is simpler than factoring out a constant from a given expression.
+#+begin_src lean
+lemma cross_multiply (a b : ℝ) : ∀ (x:ℝ), a≠0 → a*x = b → x = b/a :=
+begin
+intro,
+intro hyp,
+intro lhs,
+apply eq_div_of_mul_eq _ _ hyp,
+simp [mul_comm],
+exact lhs,
+end
+#+end_src
+*** Help on Zulip: Factoring out a constant
+This seems like a useful step towards the nonmonic case of completing the square.
+Kevin Buzzard told me about the use of =repeat {rewrite ...}= to factor out the constant.
+#+begin_src lean
+import data.real.basic
+open real 
+
+lemma factor_two (a x y : ℝ) : a*(x+y) = a * x + a * y  :=
+begin
+apply mul_add, -- yay
+end
+
+lemma factor_three (a x y z : ℝ) : a*(x+y+z) = a * x + a * y + a * z  :=
+begin
+repeat {rewrite mul_add}, 
+end
+#+end_src
+Still, I think what I'm going for is actually
+*** Help on Zulip: defining and working with a function defined by cases (e.g., indicator functions) 
+This was a way to get started thinking about [[Example 5]]. 
+Chris Hughes helped me with this example.  I've added some notes that unpack the crucial part
+of the necessary lemma.
+#+begin_src lean
+import data.real.basic data.set.intervals topology.basic analysis.exponential 
+local attribute [instance] classical.prop_decidable
+
+noncomputable def unit_indicator (x : ℝ) : ℝ := if x ∈ set.Icc (0 : ℝ) 1 then 1 else 0
+
+noncomputable def on_unit := function.restrict unit_indicator (set.Icc (0 : ℝ) 1)
+
+lemma on_unit_eq_one : on_unit = (λ x, 1) := begin
+unfold on_unit function.restrict unit_indicator,
+exact funext (λ x, if_pos x.property),
+-- funext takes in a proof that the functions are equal at each point
+--   and returns equality between the functions
+-- if_pos takes in the condition for which the ite becomes true, namely, here, the
+--   subtype property of x, baked in because the domain of x is inferred from the definition of on_unit
+--   and concludes that the ite is, in fact, true
+-- x.property
+end
+
+lemma on_unit_cont : continuous on_unit :=
+begin
+  rw on_unit_eq_one,
+  exact continuous_const,
+end
+#+end_src
+*** Exercise: functions defined by cases (variant of the absolute value function) :started:
+<<Variant Abs>>This is another step towards addressing [[Example 5]].
+The previous example was a bit simpler than what I'm working towards, so I've tried
+another exercise.  Reid Barton suggested that I could finish off the continuity proof
+here using =continuous_if=, which involves a little bit of topological thinking to
+deal with matching values at the boundary.  That seems like the right idea.
+
+However, drilling into the proof, at the relevant step we know
+=a ∈ frontier {a : ℝ | a < 0}= and we want to 
+show =-a = a=.  Intuitively, =frontier {a : ℝ | a < 0} = {0}=,
+but I don't know how to prove that.  If there was a lemma
+=Iic_diff_Iio_eq_singleton= in set.intervals, that would likely
+be relevant.
+
+#+begin_src lean
+import data.real.basic data.set.intervals topology.basic analysis.complex.exponential 
+local attribute [instance] classical.prop_decidable
+
+open real
+
+-- Only one of these will unfold properly
+noncomputable def fake_abs : ℝ → ℝ := λ x, if x < 0 then -x else x
+
+lemma fake_abs_is_abs : fake_abs = (λ x, abs x)  :=
+begin
+unfold fake_abs abs,
+-- Goal is now:
+-- ⊢ (λ (x : ℝ), ite (x ≤ 0) (-x) x) = λ (x : ℝ), max x (-x)
+funext,
+by_cases x < 0,
+-- Goal is now:
+-- ⊢ ite (x < 0) (-x) x = max x (-x)
+simp [if_pos h],
+-- * used sorry to sketch out all of the "have" steps here, getting the skeleton of the proof established
+have he : -x > 0, from neg_pos_of_neg h,
+have hl : -x > x, from lt_trans h he,
+have hm : max x (-x) = -x, from max_eq_right_of_lt hl,
+exact hm.symm,
+simp [if_neg h],
+-- Goal is now:
+-- ⊢ x = max x (-x)
+-- this intermediate step was harder than I would have thought
+have he : 0 ≤ x, from begin simp at h, exact h, end,
+have hl : -x ≤ 0, from neg_nonpos_of_nonneg he,
+have hll : -x ≤ x, from le_trans hl he,
+have hm : max x (-x) = x, from max_eq_left hll,
+exact hm.symm,
+end
+
+lemma continuous_fake_abs : continuous fake_abs := begin
+unfold fake_abs,
+apply continuous_if _ _ _,
+intro,
+intro,
+-- I don't know how to do this part...
+sorry,
+--- but the rest is then routine.
+refine continuous_neg _,
+exact continuous_id,
+exact continuous_id,
+end
+
+lemma continuous_abs : continuous (λ (x:ℝ), abs x) := begin
+rw ←fake_abs_is_abs,
+exact continuous_fake_abs,
+end
+#+end_src
+** Observations
+*** some comments on mathlib library and style of proof
+
+I guess now that I'm getting some experience with these I can begin to
+see how to compress the tactic-mode proofs towards terms mode proofs.
+I guess I can also see why people who understand the term style do
+find it convenient.  E.g., here's a term mode proof that compresses
+one of the lemmas in [[Example 1]].
+
+#+begin_src lean
+lemma simple_rational_of_twoco_items_are_nonzero' :  ∀ (a : subtype twoco_interval), a.val - 2 ≠ 0 := 
+(λ a, (ne_of_lt (sub_neg_of_lt a.2.2)))
+#+end_src
+
+*** Pattern: using sorry to get hints about what comes next
+As a general reflection on how this work might relate to Formal
+Abstracts, I'll note that 'sorry' is a pretty handy tool for looking
+around the corner to see what's coming, and giving clues about needed
+lemmas.
+
+*** Use lambda for composed functions
+We need to use a =λ= in [[Example 2]] because "=sin sin=" doesn't work.  You need to apply =sin= to an =(x:ℝ)= in order to generate a, say, =(sin_x:ℝ)= for the next step.
+
+#+begin_src lean
+#check sin
+--  sin : ℝ → ℝ
+#check (λ (x:ℝ), sin(x))
+-- λ (x : ℝ), sin x : ℝ → ℝ
+#+end_src
+*** Pattern: use sorry and have to create a proof sketch
+In my proof of =fake_abs_is_abs= in [[Variant Abs]], I used =sorry=
+together with a bunch of =have= statements to get a proof outline that
+went through, then I went back and filled in the justifications for
+the =have= results.  That seems to be a reasonable way to sketch and
+then complete a proof.
+*** Typos spotted
+There were some typos in the CICM version of this problem statement corresponding
+to [[Example 5]].  I've fixed those in my copy of the paper.
+**  List of relevant files
+
+Source files have been copied here:
+
+- =~/Dropbox/From\ Joe/OTHER/paper_examples/paper_examples_123.lean=
+- =~/Dropbox/From\ Joe/OTHER/paper_examples/paper_example_4.lean=   
+- =~/Dropbox/From\ Joe/OTHER/paper_examples/paper_example_5.lean=
+- =~/Dropbox/From\ Joe/OTHER/paper_examples/paper_example_6.lean=
+
